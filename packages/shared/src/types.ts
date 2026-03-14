@@ -73,7 +73,11 @@ export type DecisionAction =
   | "skip_paused"
   | "skip_no_change"
   | "skip_high_risk"
-  | "skip_protocol_degraded";
+  | "skip_protocol_degraded"
+  | "skip_guardrail"
+  | "skip_unprofitable"
+  | "skip_nano"
+  | "skip_small";
 
 export interface AgentDecision {
   action:            DecisionAction;
@@ -81,4 +85,6 @@ export interface AgentDecision {
   reason:            string;
   estimatedNewApy:   number;
   shouldNotify:      boolean;
+  targetAlloc?:      { stableBps: number; lpBps: number; wethBps: number };
+  newAllocBps?:      { stableBps: number; lpBps: number; wethBps: number };
 }

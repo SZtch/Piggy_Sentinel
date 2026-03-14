@@ -72,7 +72,7 @@ export function explainRebalance(ctx: RebalanceContext): ExplanationResult {
     } else if (apyChange && parseFloat(apyChange) < 0) {
       detail += `Yields shifted — I rebalanced to keep your allocation optimal at the current rates. `;
     } else {
-      detail += `I realigned your portfolio to the target: ${allocLabel(targetAlloc)}. `;
+      detail += `I realigned your portfolio to the target: ${allocLabel(targetAlloc ?? { stableBps: 0, lpBps: 0, wethBps: 0 })}. `;
     }
 
     detail += `Estimated APY going forward: ~${estimatedNewApy.toFixed(1)}%.`;
@@ -83,7 +83,7 @@ export function explainRebalance(ctx: RebalanceContext): ExplanationResult {
   // ── Initial allocation ─────────────────────────────────────────────────────
   if (action === "execute_initial_alloc") {
     const headline = "I activated your savings strategy.";
-    const detail   = `Your portfolio (${tierLabel(tier)} tier) is now allocated as: ${allocLabel(targetAlloc)}. ` +
+    const detail   = `Your portfolio (${tierLabel(tier as PortfolioTier)} tier) is now allocated as: ${allocLabel(targetAlloc ?? { stableBps: 0, lpBps: 0, wethBps: 0 })}. ` +
       `Estimated blended APY: ~${estimatedNewApy.toFixed(1)}%. ` +
       `I'll check every 6 hours and rebalance when it improves your returns.`;
     return { headline, detail, message: `✅ ${headline}\n\n${detail}` };
@@ -113,7 +113,7 @@ export function explainRebalance(ctx: RebalanceContext): ExplanationResult {
   // ── Nano / Small tier skip ─────────────────────────────────────────────────
   if (action === "skip_nano" || action === "skip_small") {
     const headline = "Your portfolio is in Aave stable yield.";
-    const detail   = `With a portfolio ${tierLabel(tier)}, I keep everything in safe stable-coin yield. ` +
+    const detail   = `With a portfolio ${tierLabel(tier as PortfolioTier)}, I keep everything in safe stable-coin yield. ` +
       `As your balance grows, I'll unlock more advanced strategies automatically.`;
     return { headline, detail, message: `💰 ${headline}\n\n${detail}` };
   }

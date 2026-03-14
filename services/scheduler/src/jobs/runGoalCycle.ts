@@ -254,7 +254,7 @@ async function loadPortfolio(userWallet: string, executorAddr: `0x${string}`, et
         }
       }
     } catch (err) {
-      logger.warn("loadPortfolio: failed to read LP positions from executor", err);
+      logger.warn("loadPortfolio: failed to read LP positions from executor", err as object);
     }
   }
 
@@ -305,7 +305,7 @@ Visit the app to withdraw your funds or set a new goal.`,
   }
 
   if (!["active", "action_required"].includes(goal.status)) {
-    logger.info(\`cycle: skip — status=\${goal.status}\`);
+    logger.info(`cycle: skip — status=${goal.status}`);
     return;
   }
 
@@ -315,7 +315,7 @@ Visit the app to withdraw your funds or set a new goal.`,
   const userWallet   = goal.owner_wallet as string;
   const executorAddr = getDeployedAddress(CHAIN_ID, "sentinelExecutor") as `0x${string}`;
   const goalDeadline = new Date(goal.deadline);
-  const goalStartDate = goal.created_at ? new Date(goal.created_at) : new Date();
+  const goalStartDate = goal.createdAt ? new Date(goal.createdAt) : new Date();
   const deadlineDays = Math.ceil((goalDeadline.getTime() - Date.now()) / 86_400_000);
   const totalMonths  = Math.max(1, Math.ceil(
     (goalDeadline.getTime() - goalStartDate.getTime()) / (30.44 * 24 * 3_600_000)
@@ -419,7 +419,7 @@ Your funds are safe.`,
       }
     } catch { /* isAllowanceValid may not exist on older deployments — skip */ }
   } catch (err) {
-    logger.warn("cycle: allowance check failed — continuing with caution", err);
+    logger.warn("cycle: allowance check failed — continuing with caution", err as object);
   }
 
   // ── Step 1b: Check wallet balance ─────────────────────────────────────────
@@ -456,7 +456,7 @@ Top up your wallet with USDm to keep your savings on track.`,
 
   const targetAmountUSD  = Number(goal.target_amount) / 1e18;
   const startingBalance  = Number(goal.principal_deposited ?? 0) / 1e18;
-  const monthlyDeposit   = Number(goal.monthly_deposit ?? 0) / 1e18;
+  const monthlyDeposit   = Number(goal.monthlyDeposit ?? 0) / 1e18;
   const blendedAPY       = LIVE_APYS.usdt * 0.6 + LIVE_APYS.usdc * 0.3 + LIVE_APYS.usdm * 0.1;
   const blendedAPYDec    = blendedAPY / 100;
 
@@ -464,7 +464,7 @@ Top up your wallet with USDm to keep your savings on track.`,
   // AUTONOMY FIX: without this, cumulativeSpent hits spendLimit and the agent
   // permanently cannot execute any transaction for this user. The epoch resets
   // monthly to restore the agent's operating budget.
-  const epochStart = goal.epoch_start ? new Date(goal.epoch_start) : new Date(goal.created_at ?? Date.now());
+  const epochStart = goal.epochStart ? new Date(goal.epochStart) : new Date(goal.createdAt ?? Date.now());
   const daysSinceEpoch = (Date.now() - epochStart.getTime()) / 86_400_000;
   if (daysSinceEpoch >= 30) {
     try {
@@ -479,7 +479,7 @@ Top up your wallet with USDm to keep your savings on track.`,
       });
       logger.info(`cycle: spend epoch reset`, { goalId, txHash });
     } catch (err) {
-      logger.warn("cycle: epoch reset failed — agent may hit SpendLimitExceeded", err);
+      logger.warn("cycle: epoch reset failed — agent may hit SpendLimitExceeded", err as object);
     }
   }
 
@@ -511,7 +511,7 @@ Top up your wallet with USDm to keep your savings on track.`,
   } catch (err) {
     // Non-fatal: if the health check itself fails, proceed with caution
     // rather than blocking execution on a monitoring error.
-    logger.warn("cycle: protocol health check threw — proceeding with caution", err);
+    logger.warn("cycle: protocol health check threw — proceeding with caution", err as object);
   }
 
   // ── Step 1d: Gas policy check ────────────────────────────────────────────
@@ -537,7 +537,7 @@ Top up your wallet with USDm to keep your savings on track.`,
       // Continue to Step 4 (intelligence) so the user still gets progress updates.
     }
   } catch (err) {
-    logger.warn("cycle: gas policy check failed — allowing execution", err);
+    logger.warn("cycle: gas policy check failed — allowing execution", err as object);
     gasPolicy = { allowed: true, reason: "gas check failed — proceeding", gasPriceGwei: 0, estimatedGasUSD: 0, celoPriceUSD: 0, celoPriceIsStale: true };
   }
 
@@ -552,7 +552,7 @@ Top up your wallet with USDm to keep your savings on track.`,
       hasCritical: pegResult.hasCritical,
     });
   } catch (err) {
-    logger.warn("cycle: peg monitor failed — proceeding without peg data", err);
+    logger.warn("cycle: peg monitor failed — proceeding without peg data", err as object);
     pegResult = null;
   }
 
@@ -563,7 +563,7 @@ Top up your wallet with USDm to keep your savings on track.`,
   try {
     const pegReadings = pegResult?.readings ?? [];
     const getPegDeviation = (token: string) =>
-      pegReadings.find(r => r.token === token)?.deviationPct ?? 0;
+      pegReadings.find((r: { token: string; deviationPct: number }) => r.token === token)?.deviationPct ?? 0;
 
     const riskScores = [
       computeRiskScore({
@@ -597,7 +597,7 @@ Top up your wallet with USDm to keep your savings on track.`,
       dominantFactor:  aggregatedRisk.dominantFactor,
     });
   } catch (err) {
-    logger.warn("cycle: risk scoring failed — proceeding without risk score", err);
+    logger.warn("cycle: risk scoring failed — proceeding without risk score", err as object);
   }
 
   // ── Step 1g: Circuit breaker ─────────────────────────────────────────────
@@ -636,12 +636,12 @@ Top up your wallet with USDm to keep your savings on track.`,
 
   // ── Step 2: Decision engine ──────────────────────────────────────────────
   // Now includes risk score and protocol health so guardrails 6 & 7 can fire.
-  const lastRebalancedAt = goal.last_rebalanced_at ? new Date(goal.last_rebalanced_at) : null;
+  const lastRebalancedAt = goal.lastRebalancedAt ? new Date(goal.lastRebalancedAt) : null;
 
   const decision = makeDecision({
     goalId,
     userWallet,
-    softPaused:      goal.soft_paused ?? false,
+    softPaused:      goal.softPaused ?? false,
     goalStatus:      goal.status,
     lastRebalancedAt,
     portfolio: {
@@ -752,7 +752,7 @@ Top up your wallet with USDm to keep your savings on track.`,
   // ── Step 4: Intelligence layer ───────────────────────────────────────────
 
   // 4a: Goal progress
-  const previousProgressPct = goal.progress_pct ? parseFloat(goal.progress_pct) : 0;
+  const previousProgressPct = goal.progressPct ? parseFloat(goal.progressPct) : 0;
   const progressResult = computeGoalProgress(
     {
       currentBalance:  portfolio.totalUSD,
@@ -794,7 +794,7 @@ Top up your wallet with USDm to keep your savings on track.`,
       decision,
       currentApys: LIVE_APYS,
       driftPercent: typeof decision.reason === "string"
-        ? parseFloat(decision.reason.match(/[\d.]+%/)?.[0] ?? "0")
+        ? parseFloat(decision.reason.match(/[d.]+%/)?.[0] ?? "0")
         : 0,
     }) : null;
 
@@ -815,7 +815,7 @@ Top up your wallet with USDm to keep your savings on track.`,
     // IL exits — highest priority
     if (ilExitCount > 0) {
       const ilMsg = explainILExit(ilExitCount, 5.0);
-      notifications.push({ type: "progress_update", text: `*Piggy Sentinel*\n\n${ilMsg.message}` });
+      notifications.push({ type: "progress_update", text: `*Piggy Sentinel*nn${ilMsg.message}` });
     }
 
     // Rebalance executed — send explanation with guardian reasoning
@@ -837,11 +837,11 @@ Top up your wallet with USDm to keep your savings on track.`,
         : "⚠️ Peg: not monitored";
 
       const guardianSummary =
-        `*Guardian checks:*\n${healthLine}\n${riskLine}\n${gasLine}\n${pegLine}`;
+        `*Guardian checks:*n${healthLine}n${riskLine}n${gasLine}n${pegLine}`;
 
       notifications.push({
         type: "progress_update",
-        text: `*Piggy Sentinel*\n\n${explanation.message}\n\n${guardianSummary}`,
+        text: `*Piggy Sentinel*nn${explanation.message}nn${guardianSummary}`,
       });
     }
 
@@ -849,7 +849,7 @@ Top up your wallet with USDm to keep your savings on track.`,
     if (progressResult.isComplete) {
       notifications.push({
         type: "goal_completed_options",
-        text: `*Piggy Sentinel* 🎉\n\n${progressResult.message}\n\nYou have 3 options:\n• *Withdraw* — take your money back\n• *Continue* — keep earning yield\n• *New goal* — start saving for something else\n\nVisit the app to choose.`,
+        text: `*Piggy Sentinel* 🎉nn${progressResult.message}nnYou have 3 options:n• *Withdraw* — take your money backn• *Continue* — keep earning yieldn• *New goal* — start saving for something elsennVisit the app to choose.`,
       });
       await updateGoalStatus(goalId, "completed");
     }
@@ -857,15 +857,15 @@ Top up your wallet with USDm to keep your savings on track.`,
     else if (progressResult.newMilestone) {
       notifications.push({
         type: "progress_update",
-        text: `*Piggy Sentinel*\n\n${progressResult.message}`,
+        text: `*Piggy Sentinel*nn${progressResult.message}`,
       });
     }
 
     // Behind pace — include top-up suggestion
     if (paceResult.paceStatus === "behind_pace" && !progressResult.isComplete) {
-      let text = `*Piggy Sentinel*\n\n${paceResult.message}`;
+      let text = `*Piggy Sentinel*nn${paceResult.message}`;
       if (topUp.recommended) {
-        text += `\n\n💡 *Suggestion:* ${topUp.message}`;
+        text += `nn💡 *Suggestion:* ${topUp.message}`;
       }
       notifications.push({ type: "behind_pace", text });
     }

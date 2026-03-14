@@ -138,16 +138,16 @@ export async function chatRoutes(app: FastifyInstance) {
       if (goal) {
         const deadline = new Date(goal.deadline);
         const daysLeft = Math.ceil((deadline.getTime() - Date.now()) / 86_400_000);
-        const progress = goal.progress_pct != null ? parseFloat(goal.progress_pct) : 0;
+        const progress = goal.progressPct != null ? parseFloat(goal.progressPct) : 0;
 
         goalContext = `User's current goal:
-- Target: ${goal.target_amount} USDm
+- Target: ${goal.targetAmount} USDm
 - Progress: ${progress.toFixed(1)}%
 - Deadline: ${deadline.toLocaleDateString("en-US")} (${daysLeft} days remaining)
 - Status: ${goal.status}`;
       }
     } catch (err) {
-      logger.warn("Failed to load goal context", err);
+      logger.warn("Failed to load goal context", err as object);
     }
 
     // Call Claude — always answer
@@ -175,7 +175,7 @@ export async function chatRoutes(app: FastifyInstance) {
           }
         } catch (err) {
           // Non-critical — don't fail the chat response over a notification error
-          logger.warn("x402 Telegram notification failed", err);
+          logger.warn("x402 Telegram notification failed", err as object);
         }
       }
 

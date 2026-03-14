@@ -24,3 +24,4 @@ export {
   tryGetDeployedAddress,
 } from "./contracts.js";
 export * from "./protocols.js";
+export * from "./protocols.js";

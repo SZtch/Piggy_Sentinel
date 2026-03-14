@@ -41,3 +41,4 @@ export {
 } from "./utils.js";
 
 export { logger } from "./logger.js";
+export { MAX_TX_RETRIES, TX_RETRY_DELAYS_MS } from "./constants.js";

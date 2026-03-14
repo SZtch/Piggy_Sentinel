@@ -1,17 +1,18 @@
-import { CHAIN_ID } from "./chains.js";
-
-type Address = string;
+import type { Address } from "viem";
 
 const PROTOCOL_ADDRESSES: Record<number, Record<string, Address>> = {
-  [CHAIN_ID]: {
-    aavePool:      "0x3E59A31363E2ad014BcF4A6F64Bf5c56e8F2AC8D",
-    mentoExchange: "0x7D4A3741eCdB83e22e8aff3A1D28e1Be2a6f8A89",
-    uniswapRouter: "0x5615CDAb10dc425a742d643d949a7F474C01abc4",
+  42220: {
+    mentoBroker: "0x777A8255cA72412f0d706dc03C9D1987306B4CaD",
+    aaveV3Pool:  "0x794a61358D6845594F94dc1DB02A252b5b4814aD",
+  },
+  44787: {
+    mentoBroker: "0x777A8255cA72412f0d706dc03C9D1987306B4CaD",
+    aaveV3Pool:  "0xB09C16F559de0C6A0BdA7dC9b05B8589f7EC5d60",
   },
 };
 
-export function getProtocolAddress(name: string): Address {
-  const addr = PROTOCOL_ADDRESSES[CHAIN_ID]?.[name];
-  if (!addr) throw new Error("Unknown protocol: " + name);
+export function getProtocolAddress(chainId: number, name: string): Address {
+  const addr = PROTOCOL_ADDRESSES[chainId]?.[name];
+  if (!addr) throw new Error("Unknown protocol: " + name + " on chain " + chainId);
   return addr;
 }

@@ -25,7 +25,7 @@ export async function telegramRoutes(app: FastifyInstance) {
     if (!code || !chatId) return reply.code(400).send({ error: "code and chatId required" });
     const rows = await confirmTelegramLink(code, chatId);
     if (!rows || rows.length === 0) return reply.code(404).send({ error: "invalid or expired code" });
-    return { linked: true, walletAddress: rows[0].wallet_address };
+    return { linked: true, walletAddress: rows[0].walletAddress };
   });
 
   // GET /api/telegram/link-status?wallet=0x...

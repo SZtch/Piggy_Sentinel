@@ -28,6 +28,7 @@
       "@piggy/config":            ["./packages/config/src/index.ts"],
       "@piggy/config/tokens":    ["./packages/config/src/tokens.ts"],
       "@piggy/config/chains":    ["./packages/config/src/chains.ts"],
+      "@piggy/config/protocols": ["./packages/config/src/protocols.ts"],
       "@piggy/config/contracts": ["./packages/config/src/contracts.ts"],
       "@piggy/observability":    ["./packages/observability/src/index.ts"],
       "@piggy/db":               ["./packages/db/src/index.ts"]
