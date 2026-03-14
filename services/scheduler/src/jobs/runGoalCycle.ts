@@ -312,7 +312,7 @@ Visit the app to withdraw your funds or set a new goal.`,
   // Emit running status
   await insertAgentEvent({ goalId, agentWallet: goal.agentWallet ?? "", status: "running" });
 
-  const userWallet   = goal.owner_wallet as string;
+  const userWallet   = goal.ownerWallet as string;
   const executorAddr = getDeployedAddress(CHAIN_ID, "sentinelExecutor") as `0x${string}`;
   const goalDeadline = new Date(goal.deadline);
   const goalStartDate = goal.createdAt ? new Date(goal.createdAt) : new Date();
@@ -454,8 +454,8 @@ Top up your wallet with USDm to keep your savings on track.`,
     logger.info("cycle: allowance restored — goal back to active", { goalId });
   }
 
-  const targetAmountUSD  = Number(goal.target_amount) / 1e18;
-  const startingBalance  = Number(goal.principal_deposited ?? 0) / 1e18;
+  const targetAmountUSD  = Number(goal.targetAmount) / 1e18;
+  const startingBalance  = Number(goal.principalDeposited ?? 0) / 1e18;
   const monthlyDeposit   = Number(goal.monthlyDeposit ?? 0) / 1e18;
   const blendedAPY       = LIVE_APYS.usdt * 0.6 + LIVE_APYS.usdc * 0.3 + LIVE_APYS.usdm * 0.1;
   const blendedAPYDec    = blendedAPY / 100;

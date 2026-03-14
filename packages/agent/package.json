@@ -8,30 +8,46 @@
   "exports": {
     ".": {
       "import": "./dist/index.js",
-      "types":  "./dist/index.d.ts"
+      "types": "./dist/index.d.ts"
     },
     "./decisionEngine.js": {
       "import": "./dist/decisionEngine.js",
-      "types":  "./dist/decisionEngine.d.ts"
+      "types": "./dist/decisionEngine.d.ts"
     },
     "./skills/index.js": {
       "import": "./dist/skills/index.js",
-      "types":  "./dist/skills/index.d.ts"
+      "types": "./dist/skills/index.d.ts"
     },
     "./intelligence/index.js": {
       "import": "./dist/intelligence/index.js",
-      "types":  "./dist/intelligence/index.d.ts"
+      "types": "./dist/intelligence/index.d.ts"
+    },
+    "./skills/safety/index.js": {
+      "import": "./dist/skills/safety/index.js",
+      "types": "./dist/skills/safety/index.d.ts"
+    },
+    "./skills/intelligence/index.js": {
+      "import": "./dist/skills/intelligence/index.js",
+      "types": "./dist/skills/intelligence/index.d.ts"
+    },
+    "./skills/safety/riskScoringEngine.js": {
+      "import": "./dist/skills/safety/riskScoringEngine.js",
+      "types": "./dist/skills/safety/riskScoringEngine.d.ts"
+    },
+    "./skills/intelligence/protocolHealthMonitor.js": {
+      "import": "./dist/skills/intelligence/protocolHealthMonitor.js",
+      "types": "./dist/skills/intelligence/protocolHealthMonitor.d.ts"
     }
   },
   "scripts": {
-    "build":     "tsc",
+    "build": "tsc",
     "typecheck": "tsc --noEmit",
-    "dev":       "tsc --watch"
+    "dev": "tsc --watch"
   },
   "dependencies": {
-    "@piggy/config":  "workspace:*",
-    "@piggy/shared":  "workspace:*",
-    "viem":           "^2.0.0"
+    "@piggy/config": "workspace:*",
+    "@piggy/shared": "workspace:*",
+    "viem": "^2.0.0"
   },
   "devDependencies": {
     "typescript": "^5.4.0"
