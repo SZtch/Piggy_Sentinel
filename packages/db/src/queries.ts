@@ -2,7 +2,7 @@
 // @piggy/db — Query Functions
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { eq, and, isNull, desc, lt, or } from "drizzle-orm";
+import { eq, and, isNull, desc, lt, or, sql } from "drizzle-orm";
 import { db } from "./client.js";
 import {
   users, agentWallets, goals, executions, agentEvents,
@@ -329,7 +329,7 @@ export async function confirmTelegramLink(code: string, chatId: string): Promise
       and(
         eq(telegramLinks.code, code),
         isNull(telegramLinks.confirmedAt),
-        lt(now, telegramLinks.expiresAt),
+        lt(telegramLinks.expiresAt, sql.raw("now()")),
       )
     )
     .returning();

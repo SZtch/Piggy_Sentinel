@@ -2,7 +2,7 @@
  * agentscan emitter — never throws, never blocks execution.
  * Called after every confirmed on-chain action.
  */
-import type { AgentEventType, SkillName } from "@piggy/shared";
+
 import { CHAIN_ID } from "@piggy/config/chains";
 import { logger } from "@piggy/shared";
 
@@ -11,8 +11,8 @@ const KEY = process.env.AGENTSCAN_API_KEY ?? "";
 
 export interface EmitPayload {
   agentWalletAddress: string;
-  skillName:          SkillName;
-  eventType:          AgentEventType;
+  skillName:          string;
+  eventType:          string;
   txHash:             string | null;
   metadata:           Record<string, unknown>;
 }

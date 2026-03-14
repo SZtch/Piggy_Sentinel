@@ -60,10 +60,10 @@ async function flushNotifications() {
   logger.info(`[notifier] flushing ${pending.length} notifications`);
 
   for (const n of pending) {
-    const ok = await sendTelegramMessage(n.telegram_chat_id, n.message_text);
+    const ok = await sendTelegramMessage(n.telegramChatId, n.messageText);
     if (ok) {
       await markNotificationSent(n.id);
-      logger.info(`[notifier] sent: ${n.notification_type} → chat ${n.telegram_chat_id}`);
+      logger.info(`[notifier] sent: ${n.notificationType} → chat ${n.telegramChatId}`);
     }
   }
 }
