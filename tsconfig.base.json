@@ -1,0 +1,36 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "types": ["node"],
+    "lib": ["ES2022"],
+    "declaration": true,
+    "declarationMap": true,
+    "paths": {
+      "@piggy/shared":           ["./packages/shared/src/index.ts"],
+      "@piggy/shared/types":     ["./packages/shared/src/types/index.ts"],
+      "@piggy/shared/constants": ["./packages/shared/src/constants/index.ts"],
+      "@piggy/shared/abis":      ["./packages/shared/src/abis/index.ts"],
+      "@piggy/shared/utils":     ["./packages/shared/src/utils/index.ts"],
+      "@piggy/skills":           ["./packages/skills/src/index.ts"],
+      "@piggy/adapters":         ["./packages/adapters/src/index.ts"],
+      "@piggy/adapters/aave.js": ["./packages/adapters/src/aave.ts"],
+      "@piggy/adapters/mento.js":["./packages/adapters/src/mento.ts"],
+      "@piggy/agent":            ["./packages/agent/src/index.ts"],
+      "@piggy/agent/decisionEngine.js":     ["./packages/agent/src/decisionEngine.ts"],
+      "@piggy/agent/skills/index.js":       ["./packages/agent/src/skills/index.ts"],
+      "@piggy/agent/intelligence/index.js": ["./packages/agent/src/intelligence/index.ts"],
+      "@piggy/config":            ["./packages/config/src/index.ts"],
+      "@piggy/config/tokens":    ["./packages/config/src/tokens.ts"],
+      "@piggy/config/chains":    ["./packages/config/src/chains.ts"],
+      "@piggy/config/contracts": ["./packages/config/src/contracts.ts"],
+      "@piggy/observability":    ["./packages/observability/src/index.ts"],
+      "@piggy/db":               ["./packages/db/src/index.ts"]
+    }
+  }
+}

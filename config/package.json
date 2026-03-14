@@ -1,0 +1,15 @@
+{
+  "name": "@piggy/config",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./chains":    "./chains.ts",
+    "./tokens":    "./tokens.ts",
+    "./protocols": "./protocols.ts",
+    "./contracts": "./contracts.ts"
+  },
+  "dependencies": {
+    "viem": "^2.10.0"
+  }
+}

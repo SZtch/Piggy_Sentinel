@@ -1,0 +1,61 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "lib": [
+      "ES2022",
+      "DOM"
+    ],
+    "types": [
+      "node"
+    ],
+    "baseUrl": "../..",
+    "outDir": "./dist",
+    "declaration": true,
+    "declarationMap": true,
+    "paths": {
+      "@piggy/shared": [
+        "packages/shared/src/index.ts"
+      ],
+      "@piggy/shared/types": [
+        "packages/shared/src/types/index.ts"
+      ],
+      "@piggy/shared/constants": [
+        "packages/shared/src/constants/index.ts"
+      ],
+      "@piggy/shared/abis": [
+        "packages/shared/src/abis/index.ts"
+      ],
+      "@piggy/shared/utils": [
+        "packages/shared/src/utils/index.ts"
+      ],
+      "@piggy/adapters": [
+        "packages/adapters/src/index.ts"
+      ],
+      "@piggy/config/tokens": [
+        "config/tokens.ts"
+      ],
+      "@piggy/config/chains": [
+        "config/chains.ts"
+      ],
+      "@piggy/config/protocols": [
+        "config/protocols.ts"
+      ],
+      "@piggy/config/contracts": [
+        "config/contracts.ts"
+      ]
+    }
+  },
+  "include": [
+    "src"
+  ],
+  "exclude": [
+    "src/checkFxDrift.ts",
+    "src/hedgeFxExposure.ts"
+  ]
+}

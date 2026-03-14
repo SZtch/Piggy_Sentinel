@@ -1,0 +1,39 @@
+{
+  "name": "@piggy/agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types":  "./dist/index.d.ts"
+    },
+    "./decisionEngine.js": {
+      "import": "./dist/decisionEngine.js",
+      "types":  "./dist/decisionEngine.d.ts"
+    },
+    "./skills/index.js": {
+      "import": "./dist/skills/index.js",
+      "types":  "./dist/skills/index.d.ts"
+    },
+    "./intelligence/index.js": {
+      "import": "./dist/intelligence/index.js",
+      "types":  "./dist/intelligence/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build":     "tsc",
+    "typecheck": "tsc --noEmit",
+    "dev":       "tsc --watch"
+  },
+  "dependencies": {
+    "@piggy/config":  "workspace:*",
+    "@piggy/shared":  "workspace:*",
+    "viem":           "^2.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0"
+  }
+}

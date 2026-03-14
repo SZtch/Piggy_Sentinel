@@ -1,0 +1,25 @@
+{
+  "logging": { "level": "info" },
+  "agent": {
+    "model": "anthropic/claude-sonnet-4-20250514",
+    "workspace": "./workspace",
+    "thinkingDefault": "none",
+    "timeoutSeconds": 60,
+    "heartbeat": { "every": "0m" },
+    "skipBootstrap": true
+  },
+  "channels": {
+    "telegram": {
+      "enabled": true,
+      "botToken": "${TELEGRAM_BOT_TOKEN}",
+      "dmPolicy": "open",
+      "groups": {
+        "*": { "requireMention": false }
+      }
+    }
+  },
+  "session": {
+    "scope": "per-sender",
+    "resetTriggers": ["/new"]
+  }
+}

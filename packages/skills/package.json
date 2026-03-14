@@ -1,0 +1,23 @@
+{
+  "name": "@piggy/skills",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@piggy/shared": "workspace:*",
+    "@piggy/adapters": "workspace:*",
+    "viem": "^2.10.0",
+    "@piggy/config": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "vitest": "^1.6.0"
+  }
+}

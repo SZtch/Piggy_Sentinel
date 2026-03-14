@@ -1,0 +1,91 @@
+# ========================
+# Environment
+# ========================
+.env
+.env.*
+!.env.example
+apps/*/.env
+apps/*/.env.local
+services/*/.env
+
+# ========================
+# Node
+# ========================
+node_modules
+.pnpm-store
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ========================
+# Build output
+# ========================
+dist
+build
+.next
+out
+coverage
+.turbo
+.cache
+
+# ========================
+# TypeScript
+# ========================
+*.tsbuildinfo
+
+# ========================
+# Logs
+# ========================
+logs
+*.log
+
+# ========================
+# OS files
+# ========================
+.DS_Store
+Thumbs.db
+
+# ========================
+# Editor
+# ========================
+.vscode
+.idea
+*.swp
+*.swo
+
+# ========================
+# Foundry / Solidity
+# ========================
+out/
+cache/
+broadcast/
+
+# ========================
+# Test artifacts
+# ========================
+coverage
+*.lcov
+
+# ========================
+# Database
+# ========================
+*.sqlite
+*.db
+
+# ========================
+# Temporary
+# ========================
+tmp
+temp
+*.tmp
+
+# ========================
+# Local scripts output
+# ========================
+scripts/output
+
+# secrets
+secrets.json
+wallet.json
+private-key.txt

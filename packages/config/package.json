@@ -1,0 +1,37 @@
+{
+  "name": "@piggy/config",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types":  "./dist/index.d.ts"
+    },
+    "./chains": {
+      "import": "./dist/chains.js",
+      "types":  "./dist/chains.d.ts"
+    },
+    "./tokens": {
+      "import": "./dist/tokens.js",
+      "types":  "./dist/tokens.d.ts"
+    },
+    "./contracts": {
+      "import": "./dist/contracts.js",
+      "types":  "./dist/contracts.d.ts"
+    }
+  },
+  "scripts": {
+    "build":     "tsc",
+    "typecheck": "tsc --noEmit",
+    "dev":       "tsc --watch"
+  },
+  "dependencies": {
+    "viem": "^2.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0"
+  }
+}

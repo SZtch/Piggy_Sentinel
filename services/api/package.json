@@ -1,0 +1,28 @@
+{
+  "name": "@piggy/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch --env-file=../../.env src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@piggy/shared": "workspace:*",
+    "@piggy/db": "workspace:*",
+    "@piggy/skills": "workspace:*",
+    "@piggy/agent": "workspace:*",
+    "@piggy/adapters": "workspace:*",
+    "@piggy/observability": "workspace:*",
+    "fastify": "^4.27.0",
+    "@fastify/cors": "^9.0.1",
+    "@piggy/config": "workspace:*",
+    "viem": "^2.10.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.0"
+  }
+}

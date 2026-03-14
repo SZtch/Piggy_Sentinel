@@ -1,0 +1,38 @@
+{
+  "name": "piggy-sentinel",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@10.23.0",
+  "description": "Non-custodial autonomous savings agent with FX protection on Celo",
+  "scripts": {
+    "dev:api": "pnpm --filter @piggy/api dev",
+    "dev:scheduler": "pnpm --filter @piggy/scheduler dev",
+    "dev:bot": "pnpm --filter @piggy/bot dev",
+    "dev:web": "pnpm --filter @piggy/web dev",
+    "build": "turbo run build",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "contracts:build": "pnpm --filter @piggy/contracts build",
+    "contracts:test": "pnpm --filter @piggy/contracts test",
+    "contracts:deploy:sepolia": "pnpm --filter @piggy/contracts deploy:sepolia",
+    "contracts:deploy:mainnet": "pnpm --filter @piggy/contracts deploy:mainnet",
+    "db:migrate": "pnpm --filter @piggy/db migrate",
+    "smoke-test": "tsx scripts/smoke-test.ts",
+    "setup:fork": "bash scripts/fork/setup-all.sh",
+    "dev:notifier": "pnpm --filter @piggy/notifier dev"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.37",
+    "tsx": "^4.7.0",
+    "turbo": "^2.0.0",
+    "typescript": "^5.4.0"
+  },
+  "workspaces": [
+    "packages/*",
+    "services/*"
+  ]
+}

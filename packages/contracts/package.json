@@ -1,0 +1,15 @@
+{
+  "name": "@piggy/contracts",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build":           "forge build",
+    "test":            "forge test -vvv",
+    "deploy:sepolia":  "forge script script/Deploy.s.sol --rpc-url $CELO_RPC_URL_SEPOLIA --broadcast",
+    "deploy:mainnet":  "forge script script/Deploy.s.sol --rpc-url $CELO_RPC_URL_MAINNET --broadcast",
+    "clean":           "forge clean"
+  },
+  "devDependencies": {
+    "tsx": "^4.7.0"
+  }
+}

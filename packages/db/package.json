@@ -1,0 +1,29 @@
+{
+  "name": "@piggy/db",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types":  "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build":     "tsc",
+    "typecheck": "tsc --noEmit",
+    "dev":       "tsc --watch",
+    "migrate":   "tsx scripts/migrate.ts"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.30.0",
+    "postgres":    "^3.4.0"
+  },
+  "devDependencies": {
+    "drizzle-kit": "^0.20.0",
+    "tsx":         "^4.7.0",
+    "typescript":  "^5.4.0"
+  }
+}
