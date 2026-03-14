@@ -28,7 +28,8 @@ export const TOKENS = {
         USDm: "0x765DE816845861e75A25fCA122bb6898B8B1282a",
         USDT: "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e",
         USDC: "0xcebA9300f2b948710d2653dD7B07f33A8B32118C",
-        wETH: "0x66803FB87aBd4aaC3cbB3fAd02C1c2D54B29efeb",
+        // FIX: wETH mainnet address yang benar (confirmed dari Celoscan: "Celo: WETH Token")
+        wETH: "0xD221812de1BD094f35587EE8E174B07B6167D9Af",
     },
 };
 export function getTokenAddress(chainId, symbol) {

@@ -27,8 +27,21 @@ export const SENTINEL_EXECUTOR_ABI = [
             { name: "user", type: "address" },
             { name: "asset", type: "address" },
             { name: "amount", type: "uint256" },
-            { name: "minReturn", type: "uint256" },
         ],
+        outputs: [],
+    },
+    {
+        type: "function",
+        name: "rebalance",
+        stateMutability: "nonpayable",
+        inputs: [{ name: "userWallet", type: "address" }],
+        outputs: [],
+    },
+    {
+        type: "function",
+        name: "rebalance",
+        stateMutability: "nonpayable",
+        inputs: [{ name: "userWallet", type: "address" }],
         outputs: [],
     },
     // ── Mento ─────────────────────────────────────────────────────────────────

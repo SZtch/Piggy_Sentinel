@@ -113,7 +113,7 @@ export async function rebalancePortfolio(input) {
                 to: executor,
                 data: encodeFunctionData({
                     abi: SENTINEL_EXECUTOR_ABI, functionName: "executeAaveWithdraw",
-                    args: [user, usdtAddr, currentAllocations.usdt],
+                    args: [user, usdtAddr, currentAllocations.usdt, 0n],
                 }),
                 value: 0n,
                 description: "withdraw aUSDT from Aave",
@@ -124,7 +124,7 @@ export async function rebalancePortfolio(input) {
                 to: executor,
                 data: encodeFunctionData({
                     abi: SENTINEL_EXECUTOR_ABI, functionName: "executeAaveWithdraw",
-                    args: [user, usdcAddr, currentAllocations.usdc],
+                    args: [user, usdcAddr, currentAllocations.usdc, 0n],
                 }),
                 value: 0n,
                 description: "withdraw aUSDC from Aave",

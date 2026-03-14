@@ -12,10 +12,11 @@
  *   - Why a specific risk profile was chosen
  */
 
-import type { Decision, DecisionAction, PortfolioTier } from "../decisionEngine.js";
+import type { AgentDecision, DecisionAction } from "@piggy/shared";
+type PortfolioTier = "nano" | "small" | "mid" | "large";
 
 export interface RebalanceContext {
-  decision:          Decision;
+  decision:          AgentDecision;
   previousApys?:     { usdm: number; usdc: number; usdt: number };
   currentApys:       { usdm: number; usdc: number; usdt: number };
   previousAllocBps?: { stableBps: number; lpBps: number; wethBps: number };

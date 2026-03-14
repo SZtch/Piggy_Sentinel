@@ -1,12 +1,6 @@
 import { HARDCODED_STRATEGY } from "@piggy/shared";
-import { logger } from "@piggy/shared";
 export async function computeSavingsStrategy(input) {
     try {
-        if (input.useOpenClaw) {
-            // OpenClaw integration point — packages/agent/src/opclaw.ts
-            // Falls back silently when not configured
-            logger.info("computeSavingsStrategy: OpenClaw path requested but not yet integrated — using hardcoded");
-        }
         if (input.walletBalance === 0n) {
             return { success: false, data: null, error: "Wallet balance is zero", txHash: null, agentscanEventId: null, executedAt: new Date() };
         }

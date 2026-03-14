@@ -62,3 +62,6 @@ export const HARDCODED_STRATEGY = {
  * requiring a new approval mid-cycle.
  */
 export const APPROVAL_MULTIPLIER = 2n;
+
+export const MAX_TX_RETRIES = 3;
+export const TX_RETRY_DELAYS_MS = [1_000, 3_000, 10_000];

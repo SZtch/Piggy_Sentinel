@@ -29,9 +29,24 @@ export declare const SENTINEL_EXECUTOR_ABI: readonly [{
     }, {
         readonly name: "amount";
         readonly type: "uint256";
-    }, {
-        readonly name: "minReturn";
-        readonly type: "uint256";
+    }];
+    readonly outputs: readonly [];
+}, {
+    readonly type: "function";
+    readonly name: "rebalance";
+    readonly stateMutability: "nonpayable";
+    readonly inputs: readonly [{
+        readonly name: "userWallet";
+        readonly type: "address";
+    }];
+    readonly outputs: readonly [];
+}, {
+    readonly type: "function";
+    readonly name: "rebalance";
+    readonly stateMutability: "nonpayable";
+    readonly inputs: readonly [{
+        readonly name: "userWallet";
+        readonly type: "address";
     }];
     readonly outputs: readonly [];
 }, {

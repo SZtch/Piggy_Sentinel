@@ -28,8 +28,23 @@ export const SENTINEL_EXECUTOR_ABI = [
       { name: "user",      type: "address" },
       { name: "asset",     type: "address" },
       { name: "amount",    type: "uint256" },
-      { name: "minReturn", type: "uint256" },
     ],
+    outputs: [],
+  },
+
+  {
+    type:             "function",
+    name:             "rebalance",
+    stateMutability:  "nonpayable",
+    inputs: [{ name: "userWallet", type: "address" }],
+    outputs: [],
+  },
+
+  {
+    type:             "function",
+    name:             "rebalance",
+    stateMutability:  "nonpayable",
+    inputs: [{ name: "userWallet", type: "address" }],
     outputs: [],
   },
 
@@ -49,6 +64,34 @@ export const SENTINEL_EXECUTOR_ABI = [
   },
 
   // ── Uniswap LP ────────────────────────────────────────────────────────────
+  {
+    type:             "function",
+    name:             "executeUniswapSwap",
+    stateMutability:  "nonpayable",
+    inputs: [
+      { name: "user",      type: "address" },
+      { name: "tokenIn",   type: "address" },
+      { name: "tokenOut",  type: "address" },
+      { name: "amountIn",  type: "uint256" },
+      { name: "minOut",    type: "uint256" },
+    ],
+    outputs: [],
+  },
+  {
+    type:             "function",
+    name:             "executeUniswapLP",
+    stateMutability:  "nonpayable",
+    inputs: [
+      { name: "user",         type: "address" },
+      { name: "token0",       type: "address" },
+      { name: "token1",       type: "address" },
+      { name: "amount0",      type: "uint256" },
+      { name: "amount1",      type: "uint256" },
+      { name: "totalUSD",     type: "uint256" },
+      { name: "portfolioUSD", type: "uint256" },
+    ],
+    outputs: [],
+  },
   {
     type:             "function",
     name:             "checkAndExitLPIfIL",

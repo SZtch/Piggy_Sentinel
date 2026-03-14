@@ -1,9 +1,21 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "rootDir":   "./src",
-    "outDir":    "./dist",
+    "rootDir": "./src",
+    "outDir": "./dist",
     "composite": true
   },
-  "include": ["src"]
+  "include": ["src"],
+  "exclude": [
+    "src/**/*.test.ts",
+    "src//tests/"
+  ],
+  "references": [
+    { "path": "../shared" },
+    { "path": "../config" },
+    { "path": "../skills" },
+    { "path": "../db" },
+    { "path": "../observability" },
+    { "path": "../adapters" }
+  ]
 }
