@@ -37,15 +37,13 @@ pnpm contracts:deploy:sepolia
 # Paste output addresses into .env
 ```
 
-### 4. Fund relayer wallet
+### 4. Fund agent wallet
 
-The relayer pays gas for all agent transactions. It holds no user funds.
+Agent wallet pays gas for all on-chain transactions. It holds no user funds.
 
 ```bash
-# Get Sepolia CELO faucet:
-#   https://faucet.celo.org/celo-sepolia
-#   https://cloud.google.com/application/web3/faucet/celo/sepolia
-# Fund ~5 CELO to RELAYER_PRIVATE_KEY address
+# Transfer ~5 CELO to AGENT_SIGNER_ADDRESS on Celo Mainnet
+# Check balance: https://celoscan.io/address/<AGENT_SIGNER_ADDRESS>
 ```
 
 ## Known Gaps (fix before first end-to-end flow)

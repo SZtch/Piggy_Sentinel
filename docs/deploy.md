@@ -6,7 +6,7 @@
 # 1. Copy and fill env
 cp .env.example .env
 # Set: CELO_RPC_URL_SEPOLIA, AAVE_POOL_ADDRESS_SEPOLIA, MENTO_BROKER_ADDRESS_SEPOLIA
-# Set: RELAYER_PRIVATE_KEY
+# Set: AGENT_SIGNER_PRIVATE_KEY, AGENT_SIGNER_ADDRESS
 
 # 2. Install and build
 pnpm install
@@ -43,7 +43,8 @@ APP_ENV=prod
 NODE_ENV=production
 ENABLE_MAINNET_EXECUTION=true
 CELO_RPC_URL_MAINNET=<alchemy-or-infura-url>
-RELAYER_PRIVATE_KEY=<mainnet-relayer-key>
+AGENT_SIGNER_PRIVATE_KEY=<your-agent-private-key>
+AGENT_SIGNER_ADDRESS=<your-agent-address>
 # ... all other vars
 
 # 2. Deploy contracts to mainnet

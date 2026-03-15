@@ -1,19 +1,23 @@
-# Piggy Sentinel — OpenClaw Setup
+# PiggySentinel — OpenClaw Setup
 
-Penny runs as an OpenClaw agent. OpenClaw handles all Telegram communication.
-The notifier service (`services/notifier/`) pushes proactive alerts separately via Telegram Bot API.
+Penny runs as an OpenClaw agent. OpenClaw handles all Telegram communication and AI reasoning. `SOUL.md` defines her personality and limits. `AGENTS.md` defines her step-by-step operating instructions.
 
 ## Architecture
 
 ```
-User → Telegram → OpenClaw (reads SOUL.md + AGENTS.md)
-                      ↓ calls Piggy API
-              /api/goals/*, /api/chat
-                      ↑
-         Notifier service → Telegram Bot API (proactive alerts)
+User → Telegram → OpenClaw
+                    │ reads SOUL.md + AGENTS.md
+                    ↓ calls
+       ${PIGGY_API_URL}/api/goals/*, /api/telegram/*, /api/chat
+
+Separately — the notifier service pushes proactive alerts:
+Penny → Telegram Bot API
+(goal reached, circuit breaker fired, rebalance completed)
 ```
 
----
+**OpenClaw = inbound** (user messages Penny).
+**Notifier = outbound** (Penny messages user unprompted).
+These are separate services.
 
 ## Setup
 
@@ -21,17 +25,13 @@ User → Telegram → OpenClaw (reads SOUL.md + AGENTS.md)
 
 ```bash
 npm install -g openclaw
-
-# Or via installer script
-curl -fsSL https://openclaw.ai/install.sh | bash
 ```
 
 Requires Node 22+.
 
-### 2. Create Telegram bot
+### 2. Create a Telegram bot
 
-1. Open Telegram → search `@BotFather` → `/newbot`
-2. Copy the bot token
+Open Telegram → search `@BotFather` → `/newbot` → copy the token.
 
 ### 3. Configure OpenClaw
 
@@ -41,16 +41,15 @@ mkdir -p ~/.openclaw
 # Copy config
 cp packages/openclaw-skill/openclaw.json ~/.openclaw/openclaw.json
 
-# Copy Penny's workspace files
+# Copy workspace (SOUL.md + AGENTS.md)
 cp -r packages/openclaw-skill/workspace ~/.openclaw/workspace
 ```
 
-Edit `~/.openclaw/openclaw.json` and replace `${TELEGRAM_BOT_TOKEN}` with your real token,
-or set the env var `TELEGRAM_BOT_TOKEN` before starting.
+Edit `~/.openclaw/openclaw.json` — replace `${TELEGRAM_BOT_TOKEN}` with your real token, or set the env var before starting.
 
-Edit `~/.openclaw/workspace/AGENTS.md` and replace `${PIGGY_API_URL}` with your deployed API URL.
+Edit `~/.openclaw/workspace/AGENTS.md` — replace `${PIGGY_API_URL}` with your deployed API URL.
 
-### 4. Set CLAUDE_API_KEY for OpenClaw
+### 4. Set your Anthropic API key
 
 OpenClaw needs an Anthropic API key to power Penny's reasoning:
 
@@ -60,19 +59,28 @@ openclaw onboard
 ```
 
 Or set it directly:
+
 ```bash
 openclaw config set agents.defaults.apiKey sk-ant-...
 ```
 
-### 5. Start OpenClaw gateway
+**Note:** This key is separate from the `CLAUDE_API_KEY` in Piggy's `.env` (used for the `/api/chat` endpoint). Both can share the same key or use different ones.
+
+### 5. Set environment variables
+
+```
+TELEGRAM_BOT_TOKEN=<from @BotFather>
+OPENCLAW_API_KEY=<from OpenClaw dashboard>
+PIGGY_API_URL=<PiggySentinel API base URL>
+```
+
+### 6. Start Penny
 
 ```bash
 openclaw gateway
 ```
 
-Test it: DM your bot on Telegram and say "hello".
-
-### 6. Start notifier service
+### 7. Start notifier service
 
 In a separate terminal, from the piggy-sentinel root:
 
@@ -80,28 +88,22 @@ In a separate terminal, from the piggy-sentinel root:
 pnpm dev:notifier
 ```
 
-Required env var:
-```
-TELEGRAM_BOT_TOKEN=<same token>
-```
+Requires `TELEGRAM_BOT_TOKEN` set to the same token.
 
----
+### 8. Test
 
-## Files
+DM your bot on Telegram. Try `/status` or just say hello.
+
+## Workspace files
 
 | File | Purpose |
 |---|---|
 | `openclaw.json` | OpenClaw config — copy to `~/.openclaw/openclaw.json` |
-| `workspace/SOUL.md` | Penny's persona and values |
-| `workspace/AGENTS.md` | Operating instructions + Piggy API reference |
-
----
+| `workspace/SOUL.md` | Who Penny is, how she speaks, what she will never do |
+| `workspace/AGENTS.md` | Exact instructions for every message type she handles |
 
 ## Notes
 
 - `dmPolicy: "open"` allows any Telegram user to DM Penny (needed for multi-user)
 - Penny's session is per-sender — each user has isolated conversation history
-- `CLAUDE_API_KEY` in Piggy's `.env` is separate from OpenClaw's API key
-  - OpenClaw uses it for Penny's Telegram reasoning
-  - Piggy uses it for the `/api/chat` endpoint
-- Both can share the same key or use different ones
+- Proactive alerts (circuit breaker, goal completed, rebalance done) come from the notifier service, not OpenClaw
