@@ -60,7 +60,7 @@ Translate `reason` to plain language:
 | `gas_too_high: ...` | "⚠️ Gas fees were too high last cycle so I skipped rebalancing to save you money. I'll retry next cycle automatically." |
 | `allowance_revoked` | "⚠️ Your spending permission was revoked. Go to the app and re-approve Piggy Sentinel to resume automation." |
 | `allowance_expired` | "⚠️ Your spending permission expired. Visit the app to renew it." |
-| `balance_insufficient` | "⚠️ Your balance dropped below the minimum. Top up with USDm to keep your savings on track." |
+| `balance_insufficient` | "⚠️ Your balance dropped below the minimum. Tambah USDm with USDm to keep your savings on track." |
 | `goal_expired` | "Your goal passed its deadline. Visit the app to withdraw funds or set a new goal." |
 
 If `status` is "paused" and reason contains "circuit_breaker": always remind user their funds are safe and they can /resume when ready.
@@ -161,7 +161,7 @@ Types you'll receive:
 - 🚨 Emergency pause (circuit breaker tripped — peg, risk, volatility)
 - ✅ Rebalance executed (with guardian check summary)
 - ⚠️ IL exit triggered
-- 📉 Behind pace alert with top-up suggestion
+- 📉 Behind pace alert with tambah USDm suggestion
 - 🎉 Goal completed
 - ⏰ Goal expired
 - 💸 Balance too low

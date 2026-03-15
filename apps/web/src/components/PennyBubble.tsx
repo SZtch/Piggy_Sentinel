@@ -1,6 +1,26 @@
 "use client";
 import { useState, useRef, useEffect } from "react";
-import { usePrivy } from "@privy-io/react-auth";
+import { usePrivy, useWallets } from "@privy-io/react-auth";
+import { createWalletClient, custom, parseUnits, type Address } from "viem";
+import { celo } from "viem/chains";
+import { defineChain } from "viem";
+
+const celoSepolia = defineChain({
+  id: 11142220, name: "Celo Sepolia",
+  nativeCurrency: { name: "CELO", symbol: "CELO", decimals: 18 },
+  rpcUrls: { default: { http: ["https://forno.celo-sepolia.celo.org"] } },
+  testnet: true,
+});
+
+const IS_MAINNET = process.env.NEXT_PUBLIC_APP_ENV === "prod";
+const CHAIN      = IS_MAINNET ? celo : celoSepolia;
+
+// ERC20 transfer ABI
+const ERC20_TRANSFER_ABI = [{
+  name: "transfer", type: "function", stateMutability: "nonpayable",
+  inputs: [{ name: "to", type: "address" }, { name: "amount", type: "uint256" }],
+  outputs: [{ type: "bool" }],
+}] as const;
 
 interface Msg {
   role: "penny" | "user";
@@ -17,18 +37,88 @@ interface ApiResponse {
   isPaid?:      boolean;
 }
 
-const GREETING = "Hi! I'm Penny 🐷\n\nAsk me anything about your savings, or just tell me a goal and I'll help you get started.";
+interface X402Info {
+  asset:  string;
+  payTo:  string;
+  amount: string;
+}
+
 const FREE_LIMIT = 10;
 
 export function PennyBubble() {
-  const { user } = usePrivy();
+  const { user, authenticated } = usePrivy();
+  const { wallets } = useWallets();
   const [open,      setOpen]      = useState(false);
-  const [msgs,      setMsgs]      = useState<Msg[]>([{ role: "penny", text: GREETING }]);
+  const [msgs,         setMsgs]         = useState<Msg[]>([]);
+  const [greetingLoaded, setGreetingLoaded] = useState(false);
   const [input,     setInput]     = useState("");
   const [loading,   setLoading]   = useState(false);
   const [remaining, setRemaining] = useState<number | null>(null);
+  const [x402Info,  setX402Info]  = useState<X402Info | null>(null);
+  const [paying,    setPaying]    = useState(false);
+  const [pendingMsg, setPendingMsg] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef  = useRef<HTMLInputElement>(null);
+
+  // Fetch contextual greeting pertama kali bubble dibuka
+  useEffect(() => {
+    if (!open || greetingLoaded || !user?.wallet?.address) return;
+    setGreetingLoaded(true);
+
+    const wallet = user.wallet.address;
+
+    // Tampilkan typing indicator dulu
+    setMsgs([{ role: "penny", text: "...", loading: true }]);
+
+    fetch("/api/goals/status?wallet=" + encodeURIComponent(wallet))
+      .then(r => r.json())
+      .then(async (g: any) => {
+        const hasGoal = g && g.status !== "no_active_goal";
+
+        if (!hasGoal) {
+          // User belum punya goal
+          setMsgs([{
+            role: "penny",
+            text: "Hei! Aku Penny 🐷\n\nKamu belum punya goal nabung nih. Yuk mulai — klik **Set up a goal** di dashboard, 2 menit aja.",
+          }]);
+          return;
+        }
+
+        const progress   = g.progressPct ? parseFloat(g.progressPct) : 0;
+        const target     = g.targetAmount ? Number(g.targetAmount) / 1e18 : 0;
+        const current    = target * (progress / 100);
+        const yieldEarned = g.yieldEarned ? Number(g.yieldEarned) / 1e18 : 0;
+        const deadline   = new Date(g.deadline);
+        const daysLeft   = Math.ceil((deadline.getTime() - Date.now()) / 86_400_000);
+        const isPaused   = g.soft_paused;
+        const isComplete = progress >= 100;
+
+        // Build contextual greeting
+        let greeting = "";
+
+        if (isComplete) {
+          greeting = `🎉 Yeay, goal kamu tercapai!\n\nTarget **$${target.toFixed(0)} USDm** udah terpenuhi. Mau tarik dana atau lanjut nabung?`;
+        } else if (isPaused) {
+          greeting = `Nabung kamu lagi di-pause ⏸\n\nTenang, semua dana aman kok. Kapan mau lanjut?`;
+        } else if (daysLeft <= 7 && progress < 80) {
+          greeting = `Deadline tinggal **${daysLeft} hari** lagi nih 😬\n\nBaru ${progress.toFixed(0)}% dari **$${target.toFixed(0)}**. Kayaknya perlu tambah sedikit buat ngejar.`;
+        } else if (progress >= 75) {
+          greeting = `Udah **${progress.toFixed(0)}%**, hampir sampai! 📈\n\nYield terkumpul: **+$${yieldEarned.toFixed(2)}**. Tinggal ${daysLeft} hari 🐷`;
+        } else if (yieldEarned > 0) {
+          greeting = `Dana kamu udah tumbuh **+$${yieldEarned.toFixed(2)}** dari yield 🐷\n\nProgress ${progress.toFixed(0)}% dari **$${target.toFixed(0)}**, ${daysLeft} hari lagi.`;
+        } else {
+          greeting = `Dana kamu lagi kerja keras nih 🐷\n\nSudah **${progress.toFixed(0)}%** dari **$${target.toFixed(0)}**, ${daysLeft} hari lagi. Ada yang mau ditanyain?`;
+        }
+
+        setMsgs([{ role: "penny", text: greeting }]);
+      })
+      .catch(() => {
+        setMsgs([{
+          role: "penny",
+          text: "Hei! Aku Penny 🐷 Ada yang bisa aku bantu?",
+        }]);
+      });
+  }, [open, greetingLoaded, user?.wallet?.address]);
 
   useEffect(() => {
     if (open) {
@@ -37,20 +127,41 @@ export function PennyBubble() {
     }
   }, [msgs, open]);
 
-  async function send() {
-    const txt = input.trim();
+  async function send(paymentHeader?: string) {
+    const txt = paymentHeader ? (pendingMsg ?? "") : input.trim();
     if (!txt || loading) return;
-    setInput("");
-    setMsgs(p => [...p, { role: "user", text: txt }, { role: "penny", text: "...", loading: true }]);
+
+    if (!paymentHeader) {
+      setInput("");
+      setPendingMsg(txt);
+      setMsgs(p => [...p, { role: "user", text: txt }, { role: "penny", text: "...", loading: true }]);
+    } else {
+      setMsgs(p => [...p, { role: "penny", text: "...", loading: true }]);
+    }
     setLoading(true);
+    setX402Info(null);
 
     try {
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (paymentHeader) headers["x-payment"] = paymentHeader;
+
       const res  = await fetch("/api/chat", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({ wallet: user?.wallet?.address ?? "guest", message: txt }),
       });
+
+      // ── 402: Payment Required ──────────────────────────────────────────
+      if (res.status === 402) {
+        const data = await res.json();
+        setMsgs(p => p.filter(m => !m.loading));
+        setX402Info(data.x402 ?? { asset: "", payTo: "", amount: "0.01" });
+        setLoading(false);
+        return;
+      }
+
       const data = await res.json() as ApiResponse;
+      setPendingMsg(null);
 
       setMsgs(p => [
         ...p.filter(m => !m.loading),
@@ -69,10 +180,55 @@ export function PennyBubble() {
     }
   }
 
-  const msgCount  = msgs.filter(m => m.role === "user").length;
+  async function payAndSend() {
+    if (!x402Info || !wallets[0] || !user?.wallet?.address) return;
+    setPaying(true);
+    try {
+      const provider = await wallets[0].getEthereumProvider();
+      const client   = createWalletClient({
+        account:   user.wallet.address as Address,
+        chain:     CHAIN,
+        transport: custom(provider),
+      });
+
+      // Kirim 0.01 USDC ke treasury
+      const txHash = await client.writeContract({
+        address:      x402Info.asset as Address,
+        abi:          ERC20_TRANSFER_ABI,
+        functionName: "transfer",
+        args:         [x402Info.payTo as Address, parseUnits(x402Info.amount, 6)],
+      });
+
+      // Kirim ulang pesan dengan payment header
+      const paymentHeader = `${txHash}:${user.wallet.address}`;
+      setX402Info(null);
+      await send(paymentHeader);
+    } catch (err) {
+      setMsgs(p => [...p, { role: "penny", text: "Payment failed. Please try again." }]);
+    } finally {
+      setPaying(false);
+    }
+  }
+
   const usedPct   = remaining !== null ? Math.max(0, ((FREE_LIMIT - remaining) / FREE_LIMIT) * 100) : 0;
   const nearLimit = remaining !== null && remaining <= 3 && remaining > 0;
   const atLimit   = remaining !== null && remaining === 0;
+
+  // Render text dengan support **bold** sederhana
+  function renderText(text: string) {
+    const parts = text.split(/(\*\*[^*]+\*\*)/g);
+    return (
+      <span>
+        {parts.map((part, i) =>
+          part.startsWith("**") && part.endsWith("**")
+            ? <strong key={i} style={{ fontWeight: 600 }}>{part.slice(2, -2)}</strong>
+            : <span key={i} style={{ whiteSpace: "pre-wrap" }}>{part}</span>
+        )}
+      </span>
+    );
+  }
+
+  if (!authenticated) return null;
 
   return (
     <div className="penny-bubble">
@@ -110,7 +266,6 @@ export function PennyBubble() {
                     color: m.role === "user" ? "#fff" : "var(--text-primary)",
                     fontSize: 13.5,
                     lineHeight: 1.5,
-                    whiteSpace: "pre-wrap",
                     opacity: m.loading ? 0.7 : 1,
                     border: m.role === "penny" ? "1px solid var(--border-subtle)" : "none",
                   }}>
@@ -120,7 +275,7 @@ export function PennyBubble() {
                           <div key={j} style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--text-tertiary)", animation: "bounce 1.2s ease infinite", animationDelay: `${j * 0.15}s` }} />
                         ))}
                       </div>
-                    ) : m.text}
+                    ) : renderText(m.text)}
                   </div>
                 </div>
 
@@ -144,6 +299,34 @@ export function PennyBubble() {
               </div>
               <div style={{ height: 2, background: "var(--bg-secondary)", borderRadius: "var(--radius-full)", overflow: "hidden" }}>
                 <div style={{ height: "100%", borderRadius: "var(--radius-full)", width: `${usedPct}%`, background: atLimit ? "var(--red)" : nearLimit ? "var(--amber)" : "var(--accent)", transition: "width 0.4s ease" }} />
+              </div>
+            </div>
+          )}
+
+          {/* x402 Payment gate */}
+          {x402Info && (
+            <div style={{ margin: "0 12px 10px", background: "var(--bg-secondary)", border: "1.5px solid var(--amber)", borderRadius: "var(--radius-md)", padding: "12px 14px" }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: "var(--amber)", marginBottom: 4 }}>
+                💳 10 free messages used
+              </div>
+              <div style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 10, lineHeight: 1.5 }}>
+                Continue chatting for <strong>0.01 USDC</strong> per message — paid directly from your wallet.
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button
+                  onClick={payAndSend}
+                  disabled={paying}
+                  className="btn btn-primary btn-sm"
+                  style={{ flex: 1 }}
+                >
+                  {paying ? "Paying…" : "Pay 0.01 USDC & send →"}
+                </button>
+                <button
+                  onClick={() => { setX402Info(null); setPendingMsg(null); }}
+                  className="btn btn-ghost btn-sm"
+                >
+                  Cancel
+                </button>
               </div>
             </div>
           )}

@@ -4,6 +4,7 @@
 
 export { db } from "./client.js";
 export * from "./schema.js";
+export { chatCounts } from "./schema.js";
 
 export type { Goal, Execution, AgentEvent, Notification, TelegramLink } from "./queries.js";
 export {

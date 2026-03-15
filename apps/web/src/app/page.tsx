@@ -1,7 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { usePrivy } from "@privy-io/react-auth";
-import { ThemeToggle } from "@/components/ThemeToggle";
 import { useRouter } from "next/navigation";
 
 const STATS = [
@@ -168,7 +167,6 @@ export default function LandingPage() {
             </span>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <ThemeToggle />
             <button className="btn btn-primary btn-sm" onClick={login} disabled={!ready}>
               Get started
             </button>

@@ -70,6 +70,9 @@ contract Deploy is Script {
         // ── Step 5: Set WETH sebagai volatile asset ───────────────────────────
         sentinel.setVolatileAssets(WETH);
 
+        // ── Step 5b: Set USDm sebagai output asset saat withdraw ─────────────
+        sentinel.setUsdm(USDM);
+
         // ── Step 6: Deploy AaveOracleWrapper dan set ke SentinelExecutor ──────
         // Wrapper diperlukan karena Aave Oracle pakai getAssetPrice() tapi
         // SentinelExecutor expect getPrice() — nama fungsi berbeda.

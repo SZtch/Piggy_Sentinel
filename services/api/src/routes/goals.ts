@@ -16,6 +16,15 @@ import { getDeployedAddress }     from "@piggy/config/contracts";
 
 export async function goalsRoutes(app: FastifyInstance) {
 
+  // ── Ownership check helper ─────────────────────────────────────────────
+  // Verifikasi bahwa caller adalah pemilik goal sebelum aksi sensitif.
+  // Pakai wallet address dari request body/query sebagai identifier.
+  async function assertGoalOwner(goalId: string, callerWallet: string): Promise<boolean> {
+    const goal = await getGoalById(goalId);
+    if (!goal) return false;
+    return goal.ownerWallet.toLowerCase() === callerWallet.toLowerCase();
+  }
+
   // GET /api/goals/status?wallet=0x...
   app.get<{ Querystring: { wallet: string } }>("/status", async (req, reply) => {
     const { wallet } = req.query;
@@ -133,9 +142,12 @@ export async function goalsRoutes(app: FastifyInstance) {
   );
 
   // POST /api/goals/:id/pause
-  app.post<{ Params: { id: string } }>("/:id/pause", async (req, reply) => {
+  app.post<{ Params: { id: string }; Body: { wallet: string } }>("/:id/pause", async (req, reply) => {
     const goal = await getGoalById(req.params.id);
     if (!goal) return reply.code(404).send({ error: "goal not found" });
+    if (!req.body.wallet || !(await assertGoalOwner(req.params.id, req.body.wallet))) {
+      return reply.code(403).send({ error: "not authorized" });
+    }
     await setSoftPausedByOwner(goal.ownerWallet, true);
     await updateGoalStatus(req.params.id, "paused");
     await emitAgentEvent({
@@ -149,9 +161,12 @@ export async function goalsRoutes(app: FastifyInstance) {
   });
 
   // POST /api/goals/:id/resume
-  app.post<{ Params: { id: string } }>("/:id/resume", async (req, reply) => {
+  app.post<{ Params: { id: string }; Body: { wallet: string } }>("/:id/resume", async (req, reply) => {
     const goal = await getGoalById(req.params.id);
     if (!goal) return reply.code(404).send({ error: "goal not found" });
+    if (!req.body.wallet || !(await assertGoalOwner(req.params.id, req.body.wallet))) {
+      return reply.code(403).send({ error: "not authorized" });
+    }
     await setSoftPausedByOwner(goal.ownerWallet, false);
     await updateGoalStatus(req.params.id, "active");
     await emitAgentEvent({

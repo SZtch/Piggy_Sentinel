@@ -41,7 +41,7 @@ const REASON_MSG: Record<string, { title: string; desc: string; fix: string }> =
   },
   balance_insufficient: {
     title: "Wallet balance too low",
-    desc:  "Your USDm balance dropped below the minimum. Top up your wallet, then reactivate.",
+    desc:  "Your USDm balance dropped below the minimum. Tambah USDm your wallet, then reactivate.",
     fix:   "Reactivate Piggy",
   },
   allowance_too_low: {
@@ -206,7 +206,7 @@ export default function ReactivatePage() {
         {!needsTx && (
           <div className="card-inset" style={{ padding: "14px 16px", borderRadius: "var(--radius-lg)", marginBottom: 20 }}>
             <div style={{ fontSize: 12.5, color: "var(--text-secondary)", lineHeight: 1.55 }}>
-              Top up your wallet with USDm, then click Reactivate. No signature needed — Piggy will detect the balance automatically.
+              Tambah USDm your wallet with USDm, then click Reactivate. No signature needed — Piggy will detect the balance automatically.
             </div>
           </div>
         )}

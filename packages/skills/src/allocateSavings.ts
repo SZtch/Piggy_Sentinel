@@ -82,57 +82,50 @@ export async function allocateSavings(
 
     const SLIPPAGE99_BPS = 9_900n; // 99% = 1% max slippage
 
-    // ── Build swap calldata (USDm → USDT, USDm → USDC via Mento) ──
-    // amountIn  = USDm amount (18-dec) ✓
-    // minAmountOut = expected output in OUTPUT token's native decimals:
-    //   USDT / USDC → 6-dec  ✓ (was incorrectly 18-dec before this fix)
-    const swaps: TxCalldata[] = [
-      {
-        to:          executor,
-        data:        encodeFunctionData({
-          abi:          SENTINEL_EXECUTOR_ABI,
-          functionName: "executeMentoSwap",
-          args: [user, usdmAddr, usdtAddr, usdtAmount18, (usdtAmount6 * SLIPPAGE99_BPS) / 10_000n],
-        }),
-        value:       0n,   // ERC-20 op — no native CELO sent
-        description: `Mento swap ${usdtAmount18.toString()} USDm → USDT`,
-      },
-      {
-        to:          executor,
-        data:        encodeFunctionData({
-          abi:          SENTINEL_EXECUTOR_ABI,
-          functionName: "executeMentoSwap",
-          args: [user, usdmAddr, usdcAddr, usdcAmount18, (usdcAmount6 * SLIPPAGE99_BPS) / 10_000n],
-        }),
-        value:       0n,
-        description: `Mento swap ${usdcAmount18.toString()} USDm → USDC`,
-      },
-    ];
+    // ── Build calldata: atomic swap+supply via executeMentoSwapAndSupply ──
+    //
+    // Satu call per asset: swap USDm → USDT/USDC dan langsung supply ke Aave
+    // dalam 1 transaksi. Output Mento tidak balik ke userWallet.
+    // User hanya perlu approve USDm — tidak perlu approve USDC/USDT.
+    //
+    // minAmountOut = expected USDT/USDC output dalam 6-dec (native token decimals)
+    // minATokens   = 99% dari minAmountOut (slippage Aave supply sangat kecil)
+    const swaps: TxCalldata[] = []; // tidak dipakai lagi — swap+supply sudah atomic
 
-    // ── Build supply calldata (supply each asset to Aave) ─────────
-    // USDT/USDC supply amounts must be in 6-dec (native token decimals).
-    // USDm supply stays 18-dec.
     const supplies: TxCalldata[] = [
+      // 60%: USDm → USDT → Aave (atomic)
       {
         to:          executor,
         data:        encodeFunctionData({
           abi:          SENTINEL_EXECUTOR_ABI,
-          functionName: "executeAaveSupply",
-          args: [user, usdtAddr, usdtAmount6, (usdtAmount6 * SLIPPAGE99_BPS) / 10_000n],
+          functionName: "executeMentoSwapAndSupply",
+          args: [
+            user, usdmAddr, usdtAddr,
+            usdtAmount18,                                   // amountIn: USDm (18-dec)
+            (usdtAmount6 * SLIPPAGE99_BPS) / 10_000n,       // minAmountOut: USDT (6-dec)
+            (usdtAmount6 * SLIPPAGE99_BPS) / 10_000n,       // minATokens: aUSDT (6-dec)
+          ],
         }),
         value:       0n,
-        description: `Aave supply ${usdtAmount6.toString()} USDT (6-dec)`,
+        description: `MentoSwapAndSupply ${usdtAmount18.toString()} USDm → USDT → Aave`,
       },
+      // 30%: USDm → USDC → Aave (atomic)
       {
         to:          executor,
         data:        encodeFunctionData({
           abi:          SENTINEL_EXECUTOR_ABI,
-          functionName: "executeAaveSupply",
-          args: [user, usdcAddr, usdcAmount6, (usdcAmount6 * SLIPPAGE99_BPS) / 10_000n],
+          functionName: "executeMentoSwapAndSupply",
+          args: [
+            user, usdmAddr, usdcAddr,
+            usdcAmount18,
+            (usdcAmount6 * SLIPPAGE99_BPS) / 10_000n,
+            (usdcAmount6 * SLIPPAGE99_BPS) / 10_000n,
+          ],
         }),
         value:       0n,
-        description: `Aave supply ${usdcAmount6.toString()} USDC (6-dec)`,
+        description: `MentoSwapAndSupply ${usdcAmount18.toString()} USDm → USDC → Aave`,
       },
+      // 10%: USDm langsung ke Aave (tidak perlu swap)
       {
         to:          executor,
         data:        encodeFunctionData({

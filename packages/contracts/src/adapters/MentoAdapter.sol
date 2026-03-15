@@ -60,13 +60,14 @@ contract MentoAdapter {
     }
 
     function swap(
-        address agentWallet,
+        address recipient,
         address fromAsset,
         address toAsset,
         uint256 amountIn,
         uint256 minAmountOut
     ) external onlyExecutor returns (uint256 amountOut) {
         IERC20(fromAsset).safeTransferFrom(msg.sender, address(this), amountIn);
+        IERC20(fromAsset).approve(address(broker), 0);
         IERC20(fromAsset).approve(address(broker), amountIn);
 
         (address provider, bytes32 exId) = _findExchange(fromAsset, toAsset);
@@ -75,7 +76,8 @@ contract MentoAdapter {
         broker.swapIn(provider, exId, fromAsset, toAsset, amountIn, minAmountOut);
         amountOut = IERC20(toAsset).balanceOf(address(this)) - before;
         if (amountOut < minAmountOut) revert InsufficientOutput(amountOut, minAmountOut);
-        IERC20(toAsset).safeTransfer(agentWallet, amountOut);
+        // recipient = userWallet (swap standalone) atau address(SentinelExecutor) (swap+supply)
+        IERC20(toAsset).safeTransfer(recipient, amountOut);
     }
 
     function getQuote(address fromAsset, address toAsset, uint256 amountIn)

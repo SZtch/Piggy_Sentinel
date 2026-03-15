@@ -25,6 +25,8 @@ export interface DecisionInput {
   softPaused:       boolean;
   goalStatus:       string;
   lastRebalancedAt: Date | null;
+  /** APY saat rebalance terakhir — untuk hitung drift akurat */
+  lastBlendedApy?:  number;
   portfolio: {
     stableUSD: number;
     lpUSD:     number;
@@ -92,7 +94,10 @@ export function makeDecision(input: DecisionInput): AgentDecision {
   }
 
   // ── Current blended APY ────────────────────────────────────────────────────
-  const currentBlended = BLENDED_APY_PCT;
+  // ── Current blended APY ────────────────────────────────────────────────────
+  // Pakai APY saat rebalance terakhir kalau ada — ini yang benar untuk drift calc.
+  // Fallback ke BLENDED_APY_PCT (6.22%) hanya untuk cycle pertama.
+  const currentBlended = input.lastBlendedApy ?? BLENDED_APY_PCT;
   const newBlended     = computeBlended(apys);
   const apyDrift       = Math.abs(newBlended - currentBlended);
 

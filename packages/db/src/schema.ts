@@ -4,7 +4,7 @@
 
 import {
   pgTable, uuid, text, numeric, boolean,
-  timestamp, jsonb, index,
+  timestamp, jsonb, index, integer, primaryKey,
 } from "drizzle-orm/pg-core";
 
 // ── users ─────────────────────────────────────────────────────────────────────
@@ -131,3 +131,14 @@ export const usedPayments = pgTable("used_payments", {
   amountUsdc:   numeric("amount_usdc", { precision: 12, scale: 6 }).notNull(),
   createdAt:    timestamp("created_at").defaultNow().notNull(),
 });
+
+// ── chat_counts (per wallet per month, persistent x402 free tier) ─────────────
+export const chatCounts = pgTable("chat_counts", {
+  wallet:    text("wallet").notNull(),
+  month:     text("month").notNull(),   // format: "YYYY-M"
+  count:     integer("count").notNull().default(0),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => ({
+  pk:        primaryKey({ columns: [t.wallet, t.month] }),
+  walletIdx: index("chat_counts_wallet_idx").on(t.wallet),
+}));

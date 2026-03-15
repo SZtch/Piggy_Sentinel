@@ -26,8 +26,8 @@ export function Providers({ children }: { children: React.ReactNode }) {
       appId={appId}
       config={{
         appearance: {
-          theme:                "light",
-          accentColor:          "#059669",
+          theme:                "dark",
+          accentColor:          "#00D4A8",  // Celo teal — sama dengan --green di globals.css
           logo:                 "/logo.png",
           showWalletLoginFirst: false,
           walletChainType:      "ethereum-only",

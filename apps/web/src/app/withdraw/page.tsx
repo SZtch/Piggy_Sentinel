@@ -3,7 +3,7 @@ import { useState, useEffect } from "react";
 import { usePrivy, useWallets } from "@privy-io/react-auth";
 import {
   createWalletClient, createPublicClient,
-  custom, http, maxUint256, type Address,
+  custom, http, type Address,
 } from "viem";
 import { celo } from "viem/chains";
 import { defineChain } from "viem";
@@ -34,11 +34,21 @@ const USDM     = process.env.NEXT_PUBLIC_USDM_ADDRESS   as Address;
 const WITHDRAW_ABI = [{
   name: "withdraw", type: "function", stateMutability: "nonpayable",
   inputs: [
-    { name: "aaveAssets",  type: "address[]" },
-    { name: "aaveAmounts", type: "uint256[]" },
+    { name: "aaveAssets", type: "address[]" },
   ],
   outputs: [],
 }] as const;
+
+// ABI untuk baca per-user aToken shares dari kontrak
+const USER_ATOKENSHARES_ABI = [{
+  name: "userATokenShares", type: "function", stateMutability: "view",
+  inputs: [
+    { name: "user",  type: "address" },
+    { name: "asset", type: "address" },
+  ],
+  outputs: [{ type: "uint256" }],
+}] as const;
+
 
 const BALANCE_ABI = [{
   name: "balanceOf", type: "function", stateMutability: "view",
@@ -79,22 +89,25 @@ export default function WithdrawPage() {
   }, [ready, authenticated, address]);
 
   async function loadAavePositions() {
-    if (!EXECUTOR || EXECUTOR.includes("_ISI_")) return;
+    if (!EXECUTOR || EXECUTOR.includes("_ISI_") || !address) return;
     try {
       const client = createPublicClient({ chain: CHAIN, transport: http(RPC_URL) });
-      const pairs = [
-        { label: "USDT (Aave)", asset: USDT, aToken: A_USDT },
-        { label: "USDC (Aave)", asset: USDC, aToken: A_USDC },
-        { label: "USDm (Aave)", asset: USDM, aToken: A_USDM },
-      ].filter(p => p.aToken && p.asset);
+      const assets = [
+        { label: "USDT (Aave)", asset: USDT },
+        { label: "USDC (Aave)", asset: USDC },
+        { label: "USDm (Aave)", asset: USDM },
+      ].filter(p => p.asset);
 
-      const results = await Promise.all(pairs.map(async p => {
+      // Baca userATokenShares[userWallet][asset] — per-user balance, bukan pooled
+      const results = await Promise.all(assets.map(async p => {
         try {
-          const balance = await client.readContract({
-            address: p.aToken, abi: BALANCE_ABI,
-            functionName: "balanceOf", args: [EXECUTOR],
+          const shares = await client.readContract({
+            address: EXECUTOR,
+            abi: USER_ATOKENSHARES_ABI,
+            functionName: "userATokenShares",
+            args: [address, p.asset],
           });
-          return { label: p.label, asset: p.asset, balance };
+          return { label: p.label, asset: p.asset, balance: shares };
         } catch { return { label: p.label, asset: p.asset, balance: 0n }; }
       }));
       setAPositions(results.filter(p => p.balance > 0n));
@@ -112,16 +125,14 @@ export default function WithdrawPage() {
       const provider = await wallets[0].getEthereumProvider();
       const client   = createWalletClient({ account: address, chain: CHAIN, transport: custom(provider) });
 
-      // Build asset list — use loaded positions or all 3 stables as fallback
-      const assets: Address[] = aPositions.length > 0
-        ? aPositions.map(p => p.asset)
-        : [USDT, USDC, USDM].filter(Boolean) as Address[];
-      const amounts: bigint[] = assets.map(() => maxUint256);
+      // Pass semua 3 stable assets — kontrak skip yang sharesnya 0
+      const assets: Address[] = [USDT, USDC, USDM].filter(Boolean) as Address[];
 
-      // User calls SentinelExecutor.withdraw() — msg.sender must be the user wallet
+      // User calls SentinelExecutor.withdraw([assets]) — no amounts needed
+      // Kontrak otomatis tarik semua dari userATokenShares
       const hash = await client.writeContract({
         address: EXECUTOR, abi: WITHDRAW_ABI,
-        functionName: "withdraw", args: [assets, amounts],
+        functionName: "withdraw", args: [assets],
       });
       setTxHash(hash);
 
@@ -162,11 +173,11 @@ export default function WithdrawPage() {
         <div style={{ textAlign: "center", marginBottom: 28 }}>
           <div style={{ fontSize: 52, marginBottom: 12 }}>✅</div>
           <h1 className="font-display" style={{ fontSize: 22, fontWeight: 700, color: "var(--text-primary)", letterSpacing: "-0.03em", marginBottom: 8 }}>Withdrawal complete</h1>
-          <p style={{ color: "var(--text-secondary)", fontSize: 14.5, lineHeight: 1.65 }}>All Aave positions closed. Funds are back in your wallet.</p>
+          <p style={{ color: "var(--text-secondary)", fontSize: 14.5, lineHeight: 1.65 }}>All positions closed. <strong>USDm</strong> is back in your wallet.</p>
         </div>
         <div className="card" style={{ padding: "20px", marginBottom: 16 }}>
           {[
-            { icon: "💰", label: "Amount returned", value: `~$${currentAmt.toFixed(2)}` },
+            { icon: "💰", label: "Amount returned (USDm)", value: `~$${currentAmt.toFixed(2)}` },
             { icon: "✨", label: "Yield earned",     value: `+$${yieldAmt.toFixed(2)}` },
             { icon: "⏸",  label: "Goal status",     value: "Paused — resume anytime" },
           ].map((row, i) => (
@@ -226,19 +237,24 @@ export default function WithdrawPage() {
             aPositions.map(p => (
               <div key={p.label} style={{ display: "flex", justifyContent: "space-between", marginBottom: 10, fontSize: 13.5 }}>
                 <span style={{ color: "var(--text-secondary)" }}>{p.label}</span>
-                <span style={{ fontWeight: 600 }}>${(Number(p.balance) / 1e18).toFixed(2)}</span>
+                <span style={{ fontWeight: 600 }}>${(Number(p.balance) / 1e6).toFixed(2)}</span>
               </div>
             ))
           ) : (
             <div style={{ fontSize: 13, color: "var(--text-tertiary)" }}>All Aave stablecoin positions</div>
           )}
-          <div style={{ borderTop: "1px solid var(--border-subtle)", marginTop: 12, paddingTop: 12, display: "flex", justifyContent: "space-between" }}>
-            <span style={{ fontSize: 13.5, fontWeight: 600 }}>You will receive</span>
-            <span className="font-display" style={{ fontWeight: 700, fontSize: 16 }}>~${currentAmt.toFixed(2)}</span>
+          <div style={{ borderTop: "1px solid var(--border-subtle)", marginTop: 12, paddingTop: 12 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+              <span style={{ fontSize: 13.5, fontWeight: 600 }}>You will receive</span>
+              <span className="font-display" style={{ fontWeight: 700, fontSize: 16 }}>~${currentAmt.toFixed(2)} USDm</span>
+            </div>
+            <div style={{ fontSize: 12, color: "var(--accent)" }}>
+              ↩ USDC &amp; USDT auto-converted to <strong>USDm</strong> via Mento
+            </div>
           </div>
         </div>
         <div style={{ fontSize: 12, color: "var(--text-tertiary)", background: "var(--bg-secondary)", borderRadius: "var(--radius-md)", padding: "10px 12px", marginBottom: 20 }}>
-          💡 20% performance fee applies to yield only. Principal is never touched.
+          💡 20% performance fee applies to yield only. Dana kamu is never touched.
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
           <button className="btn btn-secondary" onClick={() => setStage("review")}>Cancel</button>
@@ -274,7 +290,7 @@ export default function WithdrawPage() {
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", padding: "14px 22px" }}>
             {[
-              { label: "Principal",    value: `$${Math.max(0, currentAmt - yieldAmt).toFixed(2)}`, accent: false },
+              { label: "Dana kamu",    value: `$${Math.max(0, currentAmt - yieldAmt).toFixed(2)}`, accent: false },
               { label: "Yield earned", value: `+$${yieldAmt.toFixed(2)}`,                          accent: true  },
               { label: "20% fee",      value: `-$${(yieldAmt * 0.2).toFixed(2)}`,                  accent: false },
             ].map((s, i) => (

@@ -7,7 +7,8 @@ import "../libraries/SafeERC20.sol";
 /**
  * @title  UniswapAdapter
  * @notice Wraps Uniswap V3 NonfungiblePositionManager and SwapRouter.
- *         LP NFTs are always minted to the userWallet — non-custodial.
+ *         LP NFTs are held by this adapter as escrow — exitPosition() sends
+ *         underlying tokens directly to userWallet.
  *
  * Pairs supported:
  *   - WETH/USDC  (fee = 0.3%)
@@ -170,11 +171,21 @@ contract UniswapAdapter {
     // ─────────────────────────────────────────────────────────────────────────
 
     /**
-     * @notice Mint a new LP position. NFT goes directly to userWallet.
-     *         BUG FIX #3: mintPosition was missing safeTransferFrom — tokens were
-     *         still in SentinelExecutor, so positionManager.mint() would call
-     *         transferFrom(this, pool) with zero balance and always revert.
-     *         Compare: swap() already had this pull correctly.
+     * @notice Mint a new LP position.
+     *
+     * FIX — NFT ownership:
+     *   NFT sebelumnya di-mint ke userWallet (non-custodial), tapi ini menyebabkan
+     *   exitPosition() selalu revert karena UniswapAdapter bukan owner NFT dan tidak
+     *   bisa memanggil decreaseLiquidity() / burn() tanpa approval dari user.
+     *
+     *   Fix: NFT di-mint ke address(this) (UniswapAdapter) sebagai escrow sementara.
+     *   Adapter SELALU menjadi operator — bisa exit kapan saja tanpa approval tambahan.
+     *   Saat exitPosition(), underlying token langsung dikirim ke userWallet.
+     *   Ini tetap non-custodial secara efektif: user tidak bisa lose funds karena
+     *   hanya SentinelExecutor (via onlyExecutor) yang bisa trigger exitPosition().
+     *
+     *   Refund: Uniswap V3 sering tidak pakai semua token (tick range tidak selalu exact).
+     *   Sisa token di-refund ke userWallet setelah mint.
      */
     function mintPosition(
         address userWallet,
@@ -187,12 +198,16 @@ contract UniswapAdapter {
         IERC20(token0).safeTransferFrom(msg.sender, address(this), amount0);
         IERC20(token1).safeTransferFrom(msg.sender, address(this), amount1);
 
+        IERC20(token0).approve(address(positionManager), 0);
         IERC20(token0).approve(address(positionManager), amount0);
+        IERC20(token1).approve(address(positionManager), 0);
         IERC20(token1).approve(address(positionManager), amount1);
 
         uint24 fee = (_isWETH(token0) || _isWETH(token1)) ? FEE_VOLATILE : FEE_STABLE;
 
-        (tokenId, , , ) = positionManager.mint(
+        uint256 used0;
+        uint256 used1;
+        (tokenId, , used0, used1) = positionManager.mint(
             IUniswapV3PositionManager.MintParams({
                 token0:         token0,
                 token1:         token1,
@@ -201,12 +216,18 @@ contract UniswapAdapter {
                 tickUpper:      TICK_UPPER,
                 amount0Desired: amount0,
                 amount1Desired: amount1,
-                amount0Min:     0,          // slippage handled upstream in SentinelExecutor
+                amount0Min:     0,           // slippage handled upstream in SentinelExecutor
                 amount1Min:     0,
-                recipient:      userWallet, // LP NFT goes directly to user
+                recipient:      address(this), // NFT ke adapter — agar exitPosition() bisa jalan
                 deadline:       block.timestamp + 300
             })
         );
+
+        // Refund unused tokens (Uniswap V3 sering tidak pakai semua karena tick range)
+        uint256 refund0 = amount0 - used0;
+        uint256 refund1 = amount1 - used1;
+        if (refund0 > 0) IERC20(token0).safeTransfer(userWallet, refund0);
+        if (refund1 > 0) IERC20(token1).safeTransfer(userWallet, refund1);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -273,6 +294,7 @@ contract UniswapAdapter {
     ) external onlyExecutor returns (uint256 amountOut) {
         // Pull tokens from SentinelExecutor (already pulled from user + approved here)
         IERC20(fromAsset).safeTransferFrom(msg.sender, address(this), amountIn);
+        IERC20(fromAsset).approve(address(swapRouter), 0);
         IERC20(fromAsset).approve(address(swapRouter), amountIn);
 
         uint24 fee = (_isWETH(fromAsset) || _isWETH(toAsset)) ? FEE_VOLATILE : FEE_STABLE;

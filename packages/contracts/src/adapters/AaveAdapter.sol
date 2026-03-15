@@ -74,7 +74,8 @@ contract AaveAdapter {
         // Step 1: pull underlying token dari SentinelExecutor ke sini
         IERC20(asset).safeTransferFrom(msg.sender, address(this), amount);
 
-        // Step 2: approve pool
+        // Step 2: approve pool (reset ke 0 dulu untuk kompatibilitas USDT-style tokens)
+        IERC20(asset).approve(address(pool), 0);
         IERC20(asset).approve(address(pool), amount);
 
         // Step 3: supply — aToken di-mint ke msg.sender (SentinelExecutor)

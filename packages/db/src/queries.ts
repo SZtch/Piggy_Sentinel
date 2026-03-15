@@ -157,15 +157,30 @@ export async function updateGoalAfterCycle(
   id:           string,
   progressPct:  number,
   didRebalance: boolean,
+  blendedApy?:  number,
 ): Promise<void> {
+  const setCols: Record<string, unknown> = {
+    progressPct:        progressPct.toFixed(2),
+    lastRebalancedAt:   didRebalance ? new Date() : undefined,
+    lastAllowanceCheck: new Date(),
+    updatedAt:          new Date(),
+  };
+
+  // Simpan APY terakhir saat rebalance ke strategyJson
+  // Dipakai oleh decisionEngine untuk hitung drift dari nilai nyata
+  if (didRebalance && blendedApy !== undefined) {
+    const current = await db
+      .select({ strategyJson: goals.strategyJson })
+      .from(goals)
+      .where(eq(goals.id, id))
+      .then(r => r[0]?.strategyJson as Record<string, unknown> ?? {});
+
+    setCols.strategyJson = { ...current, lastBlendedApy: blendedApy };
+  }
+
   await db
     .update(goals)
-    .set({
-      progressPct:        progressPct.toFixed(2),
-      lastRebalancedAt:   didRebalance ? new Date() : undefined,
-      lastAllowanceCheck: new Date(),
-      updatedAt:          new Date(),
-    })
+    .set(setCols as Parameters<typeof db.update>[0] extends unknown ? never : never)
     .where(eq(goals.id, id));
 }
 

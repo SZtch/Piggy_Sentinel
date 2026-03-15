@@ -35,7 +35,7 @@ import {
   aggregateRiskScores,
   evaluateCircuitBreaker,
   checkStablecoinPegs,
-} from "@piggy/agent/skills/safety/index.js";
+} from "@piggy/agent/skills/safety/index.js"; // includes simulateTransaction
 import {
   checkProtocolHealth,
   evaluateGasPolicy,
@@ -54,6 +54,8 @@ import { encodeFunctionData }              from "viem";
 import { SENTINEL_EXECUTOR_ABI }           from "@piggy/shared";
 
 import { getCurrentApy as getAaveApy }     from "@piggy/adapters/aave.js";
+import { fetchVolatility24h }              from "@piggy/agent/skills/safety/index.js"; // includes simulateTransaction
+import { optimizeAllocation, buildWithdrawPlan, checkUserPolicy } from "@piggy/agent/skills/intelligence/index.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Live data helpers
@@ -175,44 +177,29 @@ async function loadPortfolio(userWallet: string, executorAddr: `0x${string}`, et
   uniswapPositions: { tokenIds: number[]; entryValues: bigint[]; currentValues: bigint[] };
 }> {
   const erc20Abi = [{ name: "balanceOf", type: "function", inputs: [{ type: "address" }], outputs: [{ type: "uint256" }], stateMutability: "view" }] as const;
+  const userATokenSharesAbi = [{ name: "userATokenShares", type: "function", inputs: [{ name: "user", type: "address" }, { name: "asset", type: "address" }], outputs: [{ type: "uint256" }], stateMutability: "view" }] as const;
 
   const addr = {
     usdm: getTokenAddress(CHAIN_ID, "USDm"),
     usdc: getTokenAddress(CHAIN_ID, "USDC"),
     usdt: getTokenAddress(CHAIN_ID, "USDT"),
     weth: getTokenAddress(CHAIN_ID, "wETH"),
-    // FIX: aToken addresses must be set via dedicated env vars (A_USDM_ADDRESS etc.).
-    // Falling back to the underlying token address would double-count wallet balances
-    // as Aave positions. If env vars are missing, use a zero address so balance reads
-    // return 0 rather than corrupt data.
-    aUsdm: (process.env.A_USDM_ADDRESS as `0x${string}`) || "0x0000000000000000000000000000000000000000" as `0x${string}`,
-    aUsdc: (process.env.A_USDC_ADDRESS as `0x${string}`) || "0x0000000000000000000000000000000000000000" as `0x${string}`,
-    aUsdt: (process.env.A_USDT_ADDRESS as `0x${string}`) || "0x0000000000000000000000000000000000000000" as `0x${string}`,
   };
-
-  if (!process.env.A_USDM_ADDRESS || !process.env.A_USDC_ADDRESS || !process.env.A_USDT_ADDRESS) {
-    logger.warn("loadPortfolio: aToken env vars not set (A_USDM_ADDRESS, A_USDC_ADDRESS, A_USDT_ADDRESS) — Aave balances will read as 0. Set these after deploying contracts.");
-  }
 
   const wallet = userWallet as `0x${string}`;
 
+  // Baca wallet balances + per-user aToken shares dari SentinelExecutor.
+  // PENTING: aToken shares dibaca dari userATokenShares(user, asset), BUKAN
+  // balanceOf(aToken, executor) — yang terakhir adalah pooled balance semua user.
   const [usdmBal, usdcBal, usdtBal, wethBal, aUsdmBal, aUsdcBal, aUsdtBal] =
     await Promise.all([
       publicClient.readContract({ address: addr.usdm, abi: erc20Abi, functionName: "balanceOf", args: [wallet] }),
       publicClient.readContract({ address: addr.usdc, abi: erc20Abi, functionName: "balanceOf", args: [wallet] }),
       publicClient.readContract({ address: addr.usdt, abi: erc20Abi, functionName: "balanceOf", args: [wallet] }),
       publicClient.readContract({ address: addr.weth, abi: erc20Abi, functionName: "balanceOf", args: [wallet] }),
-      // FIX: aToken dipegang SentinelExecutor (bukan userWallet) karena AaveAdapter.supply()
-      // mint ke msg.sender (SentinelExecutor). Baca balance dari executorAddr, bukan wallet.
-      addr.aUsdm !== "0x0000000000000000000000000000000000000000"
-        ? publicClient.readContract({ address: addr.aUsdm, abi: erc20Abi, functionName: "balanceOf", args: [executorAddr] })
-        : Promise.resolve(0n),
-      addr.aUsdc !== "0x0000000000000000000000000000000000000000"
-        ? publicClient.readContract({ address: addr.aUsdc, abi: erc20Abi, functionName: "balanceOf", args: [executorAddr] })
-        : Promise.resolve(0n),
-      addr.aUsdt !== "0x0000000000000000000000000000000000000000"
-        ? publicClient.readContract({ address: addr.aUsdt, abi: erc20Abi, functionName: "balanceOf", args: [executorAddr] })
-        : Promise.resolve(0n),
+      publicClient.readContract({ address: executorAddr, abi: userATokenSharesAbi, functionName: "userATokenShares", args: [wallet, addr.usdm] }).catch(() => 0n),
+      publicClient.readContract({ address: executorAddr, abi: userATokenSharesAbi, functionName: "userATokenShares", args: [wallet, addr.usdc] }).catch(() => 0n),
+      publicClient.readContract({ address: executorAddr, abi: userATokenSharesAbi, functionName: "userATokenShares", args: [wallet, addr.usdt] }).catch(() => 0n),
     ]);
 
   const norm6  = (v: bigint) => Number(v) / 1e6;
@@ -244,10 +231,59 @@ async function loadPortfolio(userWallet: string, executorAddr: `0x${string}`, et
 
           uniswapPositions.tokenIds.push(Number(pos.tokenId));
           uniswapPositions.entryValues.push(pos.entryValueUSD);
-          // currentValues: use entryValueUSD as conservative fallback when oracle not available.
-          // In production, replace with a live Uniswap V4 position value read.
-          uniswapPositions.currentValues.push(pos.entryValueUSD);
-          lpUSD += Number(formatUnits(pos.entryValueUSD, 18));
+
+          // ── Live LP value dari Uniswap V3 NonfungiblePositionManager ──────
+          // Baca liquidity + sqrt price untuk hitung current value
+          let currentValueUSD = pos.entryValueUSD; // fallback ke entry
+          try {
+            // Uniswap V3 NonfungiblePositionManager.positions(tokenId)
+            const NFPM_ABI = [{
+              name: "positions", type: "function", stateMutability: "view",
+              inputs: [{ name: "tokenId", type: "uint256" }],
+              outputs: [
+                { name: "nonce",                  type: "uint96"  },
+                { name: "operator",               type: "address" },
+                { name: "token0",                 type: "address" },
+                { name: "token1",                 type: "address" },
+                { name: "fee",                    type: "uint24"  },
+                { name: "tickLower",              type: "int24"   },
+                { name: "tickUpper",              type: "int24"   },
+                { name: "liquidity",              type: "uint128" },
+                { name: "feeGrowthInside0LastX128", type: "uint256" },
+                { name: "feeGrowthInside1LastX128", type: "uint256" },
+                { name: "tokensOwed0",            type: "uint128" },
+                { name: "tokensOwed1",            type: "uint128" },
+              ],
+            }] as const;
+
+            const UNISWAP_PM = process.env.UNISWAP_PM_ADDRESS as `0x${string}`;
+            if (UNISWAP_PM) {
+              const nfpmPos = await publicClient.readContract({
+                address: UNISWAP_PM, abi: NFPM_ABI,
+                functionName: "positions", args: [pos.tokenId],
+              }) as unknown as { liquidity: bigint; tokensOwed0: bigint; tokensOwed1: bigint };
+
+              // Simple approximation: kalau liquidity drop > 10% dari entry → IL terjadi
+              // Gunakan tokensOwed sebagai proxy nilai posisi saat ini
+              // Nilai approx dalam USD: tokensOwed0 (USDC, 6 dec) + tokensOwed1 * ethPrice (WETH, 18 dec)
+              const owed0USD = Number(nfpmPos.tokensOwed0) / 1e6;
+              const owed1USD = Number(nfpmPos.tokensOwed1) / 1e18 * ethPriceUSD;
+              const totalOwedUSD = owed0USD + owed1USD;
+
+              if (totalOwedUSD > 0) {
+                // Combine entry value dengan accrued fees — jika total < entry → ada IL
+                const entryUSD = Number(formatUnits(pos.entryValueUSD, 18));
+                // Current ≈ entry + fees owed (liquidity tidak berubah untuk concentrated LP)
+                const approxCurrentUSD = entryUSD + totalOwedUSD;
+                currentValueUSD = BigInt(Math.floor(approxCurrentUSD * 1e18));
+              }
+            }
+          } catch (err) {
+            logger.debug("LP live value fetch failed — using entry value", { tokenId: pos.tokenId.toString(), err });
+          }
+
+          uniswapPositions.currentValues.push(currentValueUSD);
+          lpUSD += Number(formatUnits(currentValueUSD, 18));
         } catch {
           // Array index out of bounds = no more LP positions — stop iterating
           break;
@@ -325,13 +361,14 @@ Visit the app to withdraw your funds or set a new goal.`,
   logger.info(`cycle: starting`, { goalId, userWallet, deadlineDays });
 
   // ── Step 0: Fetch live market data ──────────────────────────────────────
-  const [LIVE_APYS, ethPriceUSD] = await Promise.all([
+  const [LIVE_APYS, ethPriceUSD, volatilityResult] = await Promise.all([
     fetchLiveApys(),
     fetchEthPriceUSD(),
+    fetchVolatility24h().catch(() => null),  // non-blocking — null = skip check
   ]);
   logger.info(`cycle: live market data`, {
     goalId,
-    apys:     LIVE_APYS,
+    apys:        LIVE_APYS,
     ethPrice: ethPriceUSD,
   });
 
@@ -457,7 +494,22 @@ Top up your wallet with USDm to keep your savings on track.`,
   const targetAmountUSD  = Number(goal.targetAmount) / 1e18;
   const startingBalance  = Number(goal.principalDeposited ?? 0) / 1e18;
   const monthlyDeposit   = Number(goal.monthlyDeposit ?? 0) / 1e18;
-  const blendedAPY       = LIVE_APYS.usdt * 0.6 + LIVE_APYS.usdc * 0.3 + LIVE_APYS.usdm * 0.1;
+  // Compute optimal allocation berdasarkan live APY
+  // Menggantikan fixed 60/30/10 dengan allocation yang responsif terhadap pasar
+  const optimalAlloc = optimizeAllocation({
+    usdm: LIVE_APYS.usdm,
+    usdc: LIVE_APYS.usdc,
+    usdt: LIVE_APYS.usdt,
+  });
+  logger.info("cycle: optimal allocation", {
+    goalId,
+    usdm: optimalAlloc.allocation.usdm.toFixed(1) + "%",
+    usdc: optimalAlloc.allocation.usdc.toFixed(1) + "%",
+    usdt: optimalAlloc.allocation.usdt.toFixed(1) + "%",
+    blendedApy: optimalAlloc.blendedApy.toFixed(2) + "%",
+  });
+
+  const blendedAPY       = optimalAlloc.blendedApy;
   const blendedAPYDec    = blendedAPY / 100;
 
   // ── Step 1b: Auto-reset spend epoch if 30 days have passed ──────────────
@@ -557,33 +609,90 @@ Top up your wallet with USDm to keep your savings on track.`,
   }
 
   // ── Step 1f: Risk scoring ────────────────────────────────────────────────
-  // Score each Aave position and aggregate to worst-case.
-  // pegDeviationPct feeds directly from the peg monitor so risk is cohesive.
+  // Score each Aave position. liquidityUSD dibaca live dari Aave getReserveData.
   let aggregatedRisk: RiskScore | undefined;
   try {
     const pegReadings = pegResult?.readings ?? [];
     const getPegDeviation = (token: string) =>
       pegReadings.find((r: { token: string; deviationPct: number }) => r.token === token)?.deviationPct ?? 0;
 
+    // Fetch live liquidity dari Aave untuk risk scoring akurat
+    const AAVE_POOL_ABI = [{
+      name: "getReserveData", type: "function", stateMutability: "view",
+      inputs: [{ name: "asset", type: "address" }],
+      outputs: [{ name: "", type: "tuple", components: [
+        { name: "configuration",       type: "uint256" },
+        { name: "liquidityIndex",      type: "uint128" },
+        { name: "currentLiquidityRate",type: "uint128" },
+        { name: "variableBorrowIndex", type: "uint128" },
+        { name: "currentVariableBorrowRate", type: "uint128" },
+        { name: "currentStableBorrowRate",   type: "uint128" },
+        { name: "lastUpdateTimestamp", type: "uint40"  },
+        { name: "id",                  type: "uint16"  },
+        { name: "aTokenAddress",       type: "address" },
+        { name: "stableDebtTokenAddress",    type: "address" },
+        { name: "variableDebtTokenAddress",  type: "address" },
+        { name: "interestRateStrategyAddress", type: "address" },
+        { name: "accruedToTreasury",   type: "uint128" },
+        { name: "unbacked",            type: "uint128" },
+        { name: "isolationModeTotalDebt", type: "uint128" },
+      ]}],
+    }] as const;
+
+    const ERC20_BALANCE_ABI = [{
+      name: "balanceOf", type: "function", stateMutability: "view",
+      inputs: [{ name: "account", type: "address" }],
+      outputs: [{ type: "uint256" }],
+    }] as const;
+
+    const AAVE_POOL = process.env.AAVE_POOL_ADDRESS as `0x${string}` | undefined;
+
+    async function getLiveAaveLiquidity(tokenSymbol: string, decimals: number): Promise<number> {
+      if (!AAVE_POOL) return 1_000_000; // fallback
+      try {
+        const tokenAddr = getTokenAddress(CHAIN_ID, tokenSymbol as "USDm" | "USDC" | "USDT") as `0x${string}`;
+        const reserveData = await publicClient.readContract({
+          address: AAVE_POOL, abi: AAVE_POOL_ABI,
+          functionName: "getReserveData", args: [tokenAddr],
+        }) as { aTokenAddress: `0x${string}` };
+        // aToken total supply = total liquidity supplied to pool
+        const totalSupply = await publicClient.readContract({
+          address: reserveData.aTokenAddress, abi: ERC20_BALANCE_ABI,
+          functionName: "balanceOf", args: [AAVE_POOL],
+        });
+        return Number(totalSupply) / Math.pow(10, decimals);
+      } catch {
+        return 1_000_000; // fallback kalau RPC gagal
+      }
+    }
+
+    const [liqUsdt, liqUsdc, liqUsdm] = await Promise.all([
+      getLiveAaveLiquidity("USDT", 6),
+      getLiveAaveLiquidity("USDC", 6),
+      getLiveAaveLiquidity("USDm", 18),
+    ]);
+
+    logger.info("cycle: live Aave liquidity", { goalId, liqUsdt, liqUsdc, liqUsdm });
+
     const riskScores = [
       computeRiskScore({
         protocol:        "aave",
         apy:             LIVE_APYS.usdt,
-        liquidityUSD:    1_000_000,  // conservative default; replace with live pool depth in production
-        volatilityPct:   0.2,        // stablecoins — low baseline volatility
+        liquidityUSD:    liqUsdt,
+        volatilityPct:   0.2,
         pegDeviationPct: getPegDeviation("USDT"),
       }),
       computeRiskScore({
         protocol:        "aave",
         apy:             LIVE_APYS.usdc,
-        liquidityUSD:    1_000_000,
+        liquidityUSD:    liqUsdc,
         volatilityPct:   0.2,
         pegDeviationPct: getPegDeviation("USDC"),
       }),
       computeRiskScore({
         protocol:        "aave",
         apy:             LIVE_APYS.usdm,
-        liquidityUSD:    500_000,    // USDm pool smaller on Celo
+        liquidityUSD:    liqUsdm,
         volatilityPct:   0.3,
         pegDeviationPct: getPegDeviation("USDm"),
       }),
@@ -611,7 +720,7 @@ Top up your wallet with USDm to keep your savings on track.`,
       agentWallet: executorAddr,
       pegResult:   pegResult ?? null,
       riskScore:   aggregatedRisk ?? null,
-      volatilityPct: null,  // TODO: wire volatilityOracle when oracle is live
+      volatilityPct: volatilityResult?.volatilityPct ?? null,
     });
 
     if (cbResult.tripped) {
@@ -635,8 +744,10 @@ Top up your wallet with USDm to keep your savings on track.`,
   }
 
   // ── Step 2: Decision engine ──────────────────────────────────────────────
-  // Now includes risk score and protocol health so guardrails 6 & 7 can fire.
   const lastRebalancedAt = goal.lastRebalancedAt ? new Date(goal.lastRebalancedAt) : null;
+
+  // Baca APY terakhir dari strategyJson — disimpan setelah tiap rebalance
+  const lastBlendedApy = (goal.strategyJson as Record<string, unknown> | null)?.lastBlendedApy as number | undefined;
 
   const decision = makeDecision({
     goalId,
@@ -644,6 +755,7 @@ Top up your wallet with USDm to keep your savings on track.`,
     softPaused:      goal.softPaused ?? false,
     goalStatus:      goal.status,
     lastRebalancedAt,
+    lastBlendedApy,   // ← live dari DB, bukan hardcoded
     portfolio: {
       stableUSD: portfolio.stableUSD,
       lpUSD:     portfolio.lpUSD,
@@ -666,6 +778,26 @@ Top up your wallet with USDm to keep your savings on track.`,
 
   // ── Step 3: Execute strategy if green-lit ───────────────────────────────
   let ilExitCount = 0;
+
+  // ── userPolicyGuard: check user-defined constraints before execution ──────
+  if (decision.action === "execute_rebalance" || decision.action === "execute_initial_alloc") {
+    const userPolicy = (goal.strategyJson as Record<string, unknown> | null)?.userPolicy as Record<string, unknown> | undefined;
+    if (userPolicy) {
+      const policyResult = checkUserPolicy(userPolicy as any, {
+        action:               decision.action,
+        protocol:             "aave",
+        riskLevel:            aggregatedRisk?.level,
+        txValueUSD:           portfolio.totalUSD,
+        protocolAllocationPct: 100,
+        isProfitable:         (decision.estimatedNewApy > (lastBlendedApy ?? 0)),
+      });
+      if (!policyResult.allowed) {
+        logger.warn("cycle: user policy blocked execution", { goalId, violations: policyResult.violations });
+        await insertAgentEvent({ goalId, agentWallet: executorAddr, status: "blocked", reason: `user_policy: ${policyResult.violations.join(", ")}` });
+        return;
+      }
+    }
+  }
 
   if (decision.action === "execute_rebalance" || decision.action === "execute_initial_alloc") {
 
@@ -726,6 +858,24 @@ Top up your wallet with USDm to keep your savings on track.`,
 
       for (const action of rebalanceResult.actions) {
         try {
+          // Simulate before sending — prevents wasted gas on revert
+          const sim = await simulateTransaction({
+            to:          action.to,
+            data:        action.data,
+            value:       action.value,
+            description: action.description,
+          }).catch(() => null);
+
+          if (sim && !sim.success) {
+            logger.error(`cycle: simulation failed — skipping tx`, {
+              goalId,
+              description: action.description,
+              reason: sim.revertReason ?? "unknown",
+            });
+            failed = true;
+            break;
+          }
+
           const txHash = await submitTransaction(action);
           lastTxHash = txHash;
           logger.info(`cycle: tx confirmed — ${action.description}`, { goalId, txHash });
@@ -784,6 +934,34 @@ Top up your wallet with USDm to keep your savings on track.`,
     expectedAPY:            blendedAPYDec,
     existingMonthlyDeposit: monthlyDeposit,
   });
+
+  // 4c2: Withdraw plan — precompute for Penny context and API
+  // Runs every cycle so user always has fresh estimate when they open withdraw page
+  try {
+    const withdrawPlan = buildWithdrawPlan({
+      userWallet,
+      aavePositions: {
+        usdmUSD:  portfolio.stableUSD * 0.10,
+        usdcUSD:  portfolio.stableUSD * 0.30,
+        usdtUSD:  portfolio.stableUSD * 0.60,
+      },
+      uniswapPositions: portfolio.uniswapPositions.tokenIds.map((id, i) => ({
+        tokenId:  id,
+        valueUSD: Number(portfolio.uniswapPositions.currentValues[i] ?? 0n) / 1e18,
+      })),
+      walletBalances: { usdmUSD: 0, usdcUSD: 0, usdtUSD: 0, wethUSD: 0 },
+      targetToken: "USDm",
+    });
+    logger.info("cycle: withdraw plan", {
+      goalId,
+      totalValueUSD:   withdrawPlan.totalValueUSD.toFixed(2),
+      allSafe:         withdrawPlan.allSafe,
+      unsafeCount:     withdrawPlan.unsafeActions.length,
+      summary:         withdrawPlan.summary,
+    });
+  } catch (err) {
+    logger.debug("cycle: withdraw plan failed (non-critical)", err as object);
+  }
 
   // 4d: Strategy explanation (only if an action was taken or IL exits happened)
   const explanation = (
@@ -887,7 +1065,12 @@ Top up your wallet with USDm to keep your savings on track.`,
   //   • The 24h frequency guardrail is bypassed — agent rebalances every run.
   //   • progress_pct is always 0 — milestones fire on every cycle.
   const didRebalance = decision.action === "execute_rebalance" || decision.action === "execute_initial_alloc";
-  await updateGoalAfterCycle(goalId, progressResult.progressPercent, didRebalance);
+  await updateGoalAfterCycle(
+    goalId,
+    progressResult.progressPercent,
+    didRebalance,
+    didRebalance ? blendedAPY : undefined,  // simpan APY saat rebalance
+  );
 
   // ── Step 8: Emit final agent status event ──────────────────────────────────
   await insertAgentEvent({

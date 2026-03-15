@@ -89,16 +89,16 @@ export const api = {
       { method: "POST", body: JSON.stringify({}) }
     ),
 
-  pauseGoal: (id: string) =>
+  pauseGoal: (id: string, wallet: string) =>
     req<{ goalId: string; status: string }>(
       `/api/goals/${id}/pause`,
-      { method: "POST", body: JSON.stringify({}) }
+      { method: "POST", body: JSON.stringify({ wallet }) }
     ),
 
-  resumeGoal: (id: string) =>
+  resumeGoal: (id: string, wallet: string) =>
     req<{ goalId: string; status: string }>(
       `/api/goals/${id}/resume`,
-      { method: "POST", body: JSON.stringify({}) }
+      { method: "POST", body: JSON.stringify({ wallet }) }
     ),
 
   withdrawGoal: (id: string, txHash?: string) =>
@@ -127,9 +127,9 @@ export const api = {
 
   // Telegram
   requestTelegramLink: (wallet: string) =>
-    req<{ code: string }>("/api/telegram/link", {
+    req<{ code: string; expiresAt: string }>("/api/telegram/request-link", {
       method: "POST",
-      body: JSON.stringify({ wallet }),
+      body: JSON.stringify({ walletAddress: wallet }),
     }),
 
   // Chat usage

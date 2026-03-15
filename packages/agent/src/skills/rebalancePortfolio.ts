@@ -229,27 +229,28 @@ function blendedApy(alloc: TargetAllocation, apys: CurrentApys): number {
 // Calldata Builders
 // ─────────────────────────────────────────────────────────────────────────────
 
-function buildMentoSwap(
+function buildMentoSwapAndSupply(
   executor:     Address,
   user:         Address,
   fromAddr:     Address,
   toAddr:       Address,
-  amountIn:     bigint,
+  amountIn:     bigint,    // USDm amount (18-dec)
+  minAmountOut: bigint,    // expected output dalam OUTPUT token native decimals (6-dec untuk USDC/USDT)
   fromSymbol:   AssetSymbol,
   toSymbol:     AssetSymbol,
-  /** minAmountOut must be in the OUTPUT token's native decimals (6 for USDC/USDT, 18 for USDm) */
-  minAmountOut: bigint = applySlippage(amountIn),
 ): TxCalldata {
   assertNotMentoWETH(fromSymbol, toSymbol);
+  // minATokens = 99% dari minAmountOut (slippage Aave sangat kecil untuk stable)
+  const minATokens = (minAmountOut * 9_900n) / 10_000n;
   return {
     to:   executor,
     data: encodeFunctionData({
       abi:          SENTINEL_EXECUTOR_ABI,
-      functionName: "executeMentoSwap",
-      args:         [user, fromAddr, toAddr, amountIn, minAmountOut],
+      functionName: "executeMentoSwapAndSupply",
+      args:         [user, fromAddr, toAddr, amountIn, minAmountOut, minATokens],
     }),
     value:       0n,
-    description: `Mento swap ${formatUnits(amountIn, 18)} ${fromSymbol} → ${toSymbol}`,
+    description: `MentoSwapAndSupply ${formatUnits(amountIn, 18)} ${fromSymbol} → ${toSymbol} → Aave`,
   };
 }
 
@@ -325,6 +326,29 @@ function buildRebalanceGate(executor: Address, user: Address): TxCalldata {
     }),
     value:       0n,
     description: "Rebalance gate — record timestamp on-chain",
+  };
+}
+
+/**
+ * Forward sisa token yang parkir di SentinelExecutor ke userWallet.
+ * Dipanggil setelah LP sequence selesai (executeAaveWithdraw → swap → LP).
+ * Jika ada sisa USDC/WETH yang tidak terpakai karena refund Uniswap V3,
+ * ini memastikan token tersebut sampai ke user, bukan stuck di kontrak.
+ */
+function buildForwardToUser(
+  executor: Address,
+  user:     Address,
+  assets:   Address[],
+): TxCalldata {
+  return {
+    to:   executor,
+    data: encodeFunctionData({
+      abi:          SENTINEL_EXECUTOR_ABI,
+      functionName: "forwardToUser",
+      args:         [user, assets],
+    }),
+    value:       0n,
+    description: `Forward sisa token ke userWallet: ${assets.join(", ")}`,
   };
 }
 
@@ -525,10 +549,8 @@ export async function rebalancePortfolio(
     const swapAmt18 = needUsdt < balances.usdm ? needUsdt : balances.usdm;
     if (swapAmt18 > 0n) {
       const swapAmt6 = norm18to6(swapAmt18); // convert expected USDT output to 6-dec
-      // Mento: USDm (18-dec input) → USDT (6-dec output, minAmountOut must be 6-dec)
-      actions.push(buildMentoSwap(executor, user, addr.usdm, addr.usdt, swapAmt18, "USDm", "USDT", swapAmt6));
-      // Aave supply: USDT amount in 6-dec (native token decimals)
-      actions.push(buildAaveSupply(executor, user, addr.usdt, swapAmt6, "USDT"));
+      // Atomic: USDm → USDT via Mento + supply USDT ke Aave dalam 1 tx
+      actions.push(buildMentoSwapAndSupply(executor, user, addr.usdm, addr.usdt, swapAmt18, swapAmt6, "USDm", "USDT"));
     }
   }
 
@@ -539,10 +561,8 @@ export async function rebalancePortfolio(
     const swapAmt18  = needUsdc < remaining ? needUsdc : remaining;
     if (swapAmt18 > 0n) {
       const swapAmt6 = norm18to6(swapAmt18); // convert expected USDC output to 6-dec
-      // Mento: USDm (18-dec input) → USDC (6-dec output, minAmountOut must be 6-dec)
-      actions.push(buildMentoSwap(executor, user, addr.usdm, addr.usdc, swapAmt18, "USDm", "USDC", swapAmt6));
-      // Aave supply: USDC amount in 6-dec (native token decimals)
-      actions.push(buildAaveSupply(executor, user, addr.usdc, swapAmt6, "USDC"));
+      // Atomic: USDm → USDC via Mento + supply USDC ke Aave dalam 1 tx
+      actions.push(buildMentoSwapAndSupply(executor, user, addr.usdm, addr.usdc, swapAmt18, swapAmt6, "USDm", "USDC"));
     }
   }
 
@@ -571,6 +591,9 @@ export async function rebalancePortfolio(
           lpUsdc6, lpWeth,  // USDC = 6-dec, WETH = 18-dec
           lpGap, grandTotal,
         ));
+
+        // Forward sisa token (refund dari Uniswap V3 tick range) ke userWallet
+        actions.push(buildForwardToUser(executor, user, [addr.usdc, addr.weth]));
       }
     }
   }

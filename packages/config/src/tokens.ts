@@ -23,7 +23,7 @@ const MAINNET_TOKENS: TokenMap = {
 
   // Circle / Tether bridged
   USDC: "0xcebA9300f2b948710d2653dD7B07f33A8B32118C",  // USDC (native via Circle)
-  USDT: "0x617f3112bf5397D0467D315cC709EF968D9ba546",  // USDT (Tether)
+  USDT: "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e",  // USDT (native Celo, confirmed Celoscan)
 
   // Wrapped tokens
   wETH: "0x66803FB87aBd4aaC3cbB3fAd02C4d1BbBaE957F1",  // Wrapped Ether on Celo

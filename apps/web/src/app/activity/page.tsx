@@ -5,111 +5,143 @@ import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
 import { api, type ExecutionEntry, type GoalHistory } from "@/lib/api";
 
-const SKILL_ICONS: Record<string, string> = {
-  allocateSavings:    "💰",
-  rebalancePortfolio: "⚖️",
-  checkGoalProgress:  "📊",
-  checkFxDrift:       "💱",
-  hedgeFxExposure:    "🛡️",
-  withdrawAll:        "📤",
-};
-
 const EXPLORER = process.env.NEXT_PUBLIC_APP_ENV === "prod"
   ? "https://celo.blockscout.com/tx/"
   : "https://celo-sepolia.blockscout.com/tx/";
+
+const SKILL_LABEL: Record<string, string> = {
+  allocateSavings:           "allocate_savings",
+  rebalancePortfolio:        "rebalance_portfolio",
+  checkGoalProgress:         "check_progress",
+  executeMentoSwapAndSupply: "mento_swap_supply",
+  executeAaveSupply:         "aave_supply",
+  executeAaveWithdraw:       "aave_withdraw",
+  checkAndExitLPIfIL:        "il_stop_loss",
+  withdrawAll:               "withdraw_all",
+};
+
+function Dot({ status }: { status: string }) {
+  const c = status === "confirmed" ? "var(--green)" : status === "failed" ? "var(--red)" : "var(--amber)";
+  return <span style={{ width: 6, height: 6, borderRadius: "50%", background: c, display: "inline-block", flexShrink: 0 }} />;
+}
+
+type Filter = "all" | "confirmed" | "pending" | "failed";
 
 export default function ActivityPage() {
   const { ready, authenticated, user } = usePrivy();
   const router  = useRouter();
   const address = user?.wallet?.address;
+
   const [executions, setExecutions] = useState<ExecutionEntry[]>([]);
   const [loading,    setLoading]    = useState(true);
-  const [filter,     setFilter]     = useState<string>("all");
+  const [filter,     setFilter]     = useState<Filter>("all");
 
   useEffect(() => {
     if (!ready) return;
     if (!authenticated) { router.push("/"); return; }
     if (!address) return;
-    api.getGoalHistory(address)
+    const load = () => api.getGoalHistory(address)
       .then(h => setExecutions((h as GoalHistory).executions ?? []))
       .finally(() => setLoading(false));
+    load();
+    const iv = setInterval(load, 30_000);
+    return () => clearInterval(iv);
   }, [ready, authenticated, address]);
 
-  const filtered = filter === "all"
-    ? executions
-    : executions.filter(e => e.status === filter);
+  const filtered = filter === "all" ? executions : executions.filter(e => e.status === filter);
 
   return (
     <AppShell>
-      <div style={{ marginBottom: 26 }}>
-        <h1 className="font-display" style={{ fontSize: 21, fontWeight: 700, color: "var(--text-primary)", letterSpacing: "-0.03em" }}>Activity</h1>
-        <p style={{ color: "var(--text-secondary)", fontSize: 12.5, marginTop: 2 }}>
-          {loading ? "Loading…" : `${executions.length} total action${executions.length !== 1 ? "s" : ""} by Piggy`}
-        </p>
-      </div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 24 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <h1>Activity</h1>
+          <span style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--text3)" }}>
+            {loading ? "…" : `${executions.length} events`}
+          </span>
+        </div>
 
-      {/* Filter pills */}
-      {!loading && executions.length > 0 && (
-        <div style={{ display: "flex", gap: 8, marginBottom: 20, flexWrap: "wrap" }}>
-          {(["all", "confirmed", "pending", "failed"] as const).map(f => (
-            <button key={f} onClick={() => setFilter(f)} className="btn btn-sm"
-              style={{ borderRadius: "var(--radius-full)", border: "1.5px solid", borderColor: filter === f ? "var(--accent)" : "var(--border)", background: filter === f ? "var(--accent-pale)" : "transparent", color: filter === f ? "var(--accent)" : "var(--text-secondary)", fontWeight: filter === f ? 600 : 400, padding: "6px 14px" }}>
-              {f.charAt(0).toUpperCase() + f.slice(1)}
+        {/* Filter tabs */}
+        <div style={{ display: "flex", gap: 2, background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: 6, padding: 2 }}>
+          {(["all", "confirmed", "pending", "failed"] as Filter[]).map(f => (
+            <button key={f} onClick={() => setFilter(f)} style={{
+              padding: "4px 10px", borderRadius: 4,
+              fontSize: 11, fontFamily: "var(--mono)",
+              background: filter === f ? "var(--bg3)" : "transparent",
+              color: filter === f ? "var(--text)" : "var(--text3)",
+              border: "none", cursor: "pointer",
+              transition: "all 0.15s",
+            }}>
+              {f}
               {f !== "all" && (
-                <span style={{ marginLeft: 5, fontSize: 10, background: filter === f ? "var(--accent-light)" : "var(--bg-secondary)", padding: "1px 6px", borderRadius: "var(--radius-full)" }}>
+                <span style={{ marginLeft: 5, color: "var(--text3)" }}>
                   {executions.filter(e => e.status === f).length}
                 </span>
               )}
             </button>
           ))}
         </div>
-      )}
+      </div>
 
       {loading && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {[0,1,2,3,4].map(i => <div key={i} className="skeleton" style={{ height: 62, borderRadius: "var(--radius-md)" }} />)}
+        <div style={{ display: "flex", flexDirection: "column", gap: 1, background: "var(--border)", borderRadius: 8, overflow: "hidden" }}>
+          {[0,1,2,3,4].map(i => <div key={i} className="skeleton" style={{ height: 44 }} />)}
         </div>
       )}
 
       {!loading && filtered.length === 0 && (
-        <div className="card" style={{ padding: "52px 24px", textAlign: "center" }}>
-          <div style={{ fontSize: 40, marginBottom: 12 }}>🐷</div>
-          <p style={{ color: "var(--text-tertiary)", fontSize: 14 }}>
-            {filter !== "all" ? `No "${filter}" actions yet.` : "No activity yet — Piggy will start shortly."}
+        <div className="card" style={{ padding: "48px", textAlign: "center" }}>
+          <div style={{ fontSize: 32, marginBottom: 12 }}>🐷</div>
+          <p style={{ color: "var(--text2)" }}>
+            {filter !== "all" ? `No "${filter}" events.` : "No activity yet — Piggy will start soon."}
           </p>
         </div>
       )}
 
       {!loading && filtered.length > 0 && (
-        <div className="card" style={{ overflow: "hidden" }}>
-          {filtered.map((h, i) => (
-            <div key={h.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 20px", borderBottom: i < filtered.length - 1 ? "1px solid var(--border-subtle)" : "none" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                <div style={{ width: 34, height: 34, borderRadius: "50%", flexShrink: 0, background: h.status === "confirmed" ? "var(--accent-pale)" : h.status === "failed" ? "var(--red-light)" : "var(--amber-light)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, border: `1px solid ${h.status === "confirmed" ? "var(--accent-light)" : h.status === "failed" ? "var(--red-light)" : "var(--amber-light)"}` }}>
-                  {SKILL_ICONS[h.skill_name] ?? "⚙️"}
-                </div>
-                <div>
-                  <div style={{ fontSize: 13.5, fontWeight: 500, color: "var(--text-primary)" }}>
-                    {h.skill_name.replace(/([A-Z])/g, " $1").trim()}
-                  </div>
-                  <div style={{ fontSize: 11.5, color: "var(--text-tertiary)", marginTop: 1 }}>
-                    {new Date(h.created_at).toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" })}
-                  </div>
-                </div>
-              </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <div className={`badge ${h.status === "confirmed" ? "badge-green" : h.status === "failed" ? "badge-red" : "badge-amber"}`}>
-                  {h.status}
-                </div>
-                {h.tx_hash && (
-                  <a href={`${EXPLORER}${h.tx_hash}`} target="_blank" rel="noopener noreferrer"
-                    style={{ fontSize: 11, color: "var(--accent)", background: "var(--accent-pale)", border: "1px solid var(--accent-light)", padding: "3px 8px", borderRadius: "var(--radius-full)", textDecoration: "none" }}>
-                    ↗ Tx
-                  </a>
-                )}
-              </div>
-            </div>
-          ))}
+        <div className="card table-wrap">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Event</th>
+                <th>Timestamp</th>
+                <th>Status</th>
+                <th>Transaction</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map(h => (
+                <tr key={h.id}>
+                  <td>
+                    <span style={{ fontFamily: "var(--mono)", color: "var(--text)", fontSize: 12 }}>
+                      {SKILL_LABEL[h.skill_name] ?? h.skill_name}
+                    </span>
+                  </td>
+                  <td style={{ fontFamily: "var(--mono)", fontSize: 12 }}>
+                    {new Date(h.created_at).toLocaleString("en-US", {
+                      year: "numeric", month: "short", day: "numeric",
+                      hour: "2-digit", minute: "2-digit",
+                    })}
+                  </td>
+                  <td>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <Dot status={h.status} />
+                      <span style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--text2)" }}>{h.status}</span>
+                    </div>
+                  </td>
+                  <td>
+                    {h.tx_hash ? (
+                      <a href={`${EXPLORER}${h.tx_hash}`} target="_blank" rel="noopener noreferrer"
+                        style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--green)", textDecoration: "none" }}>
+                        {h.tx_hash.slice(0, 8)}…{h.tx_hash.slice(-6)} ↗
+                      </a>
+                    ) : (
+                      <span style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--text3)" }}>—</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
     </AppShell>
