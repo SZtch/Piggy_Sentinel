@@ -125,6 +125,8 @@ export const SENTINEL_EXECUTOR_ABI = [
       { name: "token1",            type: "address" },
       { name: "amount0",           type: "uint256" },
       { name: "amount1",           type: "uint256" },
+      { name: "amount0Min",        type: "uint256" },
+      { name: "amount1Min",        type: "uint256" },
       { name: "totalValueUSD",     type: "uint256" },
       { name: "totalPortfolioUSD", type: "uint256" },
     ],

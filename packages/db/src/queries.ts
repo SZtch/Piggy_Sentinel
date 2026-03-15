@@ -99,8 +99,8 @@ export async function getActiveGoalByOwner(walletAddress: string): Promise<Goal 
         ),
       )
     )
-    .limit(1);
-  return rows[0];
+    .orderBy(desc(goals.createdAt)); // B5 FIX: hapus .limit(1) — return yang terbaru
+  return rows[0]; // caller tetap dapat satu goal (yang paling baru)
 }
 
 export async function getAllActiveGoals(): Promise<Goal[]> {
@@ -151,6 +151,21 @@ export async function setSoftPausedByOwner(
     .update(goals)
     .set({ softPaused, updatedAt: new Date() })
     .where(eq(goals.ownerWallet, walletAddress));
+}
+
+/**
+ * A2 FIX: scope soft-pause ke satu goal ID, bukan semua goal milik wallet.
+ * Versi lama setSoftPausedByOwner update semua goal wallet — kalau user
+ * punya lebih dari 1 goal, pause satu goal akan pause semua sekaligus.
+ */
+export async function setSoftPausedById(
+  goalId:     string,
+  softPaused: boolean,
+): Promise<void> {
+  await db
+    .update(goals)
+    .set({ softPaused, updatedAt: new Date() })
+    .where(eq(goals.id, goalId));
 }
 
 export async function updateGoalAfterCycle(
@@ -388,13 +403,30 @@ export async function isPaymentUsed(txHash: string): Promise<boolean> {
   return rows.length > 0;
 }
 
+/**
+ * B1 FIX — Atomic replay protection.
+ *
+ * Versi lama: isPaymentUsed() → verify → markPaymentUsed()
+ *   Dua concurrent request lolos cek pertama sebelum salah satunya mark DB.
+ *
+ * Versi baru: markPaymentUsed() sebagai atomic lock via INSERT ... ON CONFLICT.
+ *   - Kalau INSERT berhasil  → return true  (request ini yang berhak)
+ *   - Kalau INSERT conflict  → return false (sudah dipakai, tolak)
+ *   PostgreSQL INSERT adalah atomic — tidak ada race condition.
+ *
+ * isPaymentUsed() tetap ada untuk keperluan audit/read-only.
+ */
 export async function markPaymentUsed(
   txHash:       string,
   payerAddress: string,
   amountUsdc:   number,
-): Promise<void> {
-  await db
+): Promise<boolean> {
+  const result = await db
     .insert(usedPayments)
     .values({ txHash, payerAddress, amountUsdc: amountUsdc.toFixed(6) })
-    .onConflictDoNothing();
+    .onConflictDoNothing()
+    .returning({ txHash: usedPayments.txHash });
+
+  // returning() returns the inserted row only if INSERT succeeded (not on conflict)
+  return result.length > 0;
 }

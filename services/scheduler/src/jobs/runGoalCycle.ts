@@ -383,48 +383,54 @@ Visit the app to withdraw your funds or set a new goal.`,
   }
 
   // ── Step 1a: Check ERC-20 allowance ──────────────────────────────────────
-  // If user has revoked allowance → mark goal action_required and notify.
-  // This is the key safety check that was previously missing.
+  // A3 FIX: cek allowance untuk semua token yang dipakai agent (USDm, USDC, USDT),
+  // bukan hanya USDm. Kalau user revoke USDC atau USDT, agent tetap jalan
+  // sampai hit revert on-chain — buang gas dan buat status error yang membingungkan.
   try {
     const allowanceAbi = [{ name: "allowance", type: "function", inputs: [{ name: "owner", type: "address" }, { name: "spender", type: "address" }], outputs: [{ type: "uint256" }], stateMutability: "view" }] as const;
-    const usdmAddr = getTokenAddress(CHAIN_ID, "USDm");
-    const allowance = await publicClient.readContract({
-      address:      usdmAddr,
-      abi:          allowanceAbi,
-      functionName: "allowance",
-      args:         [userWallet as `0x${string}`, executorAddr],
-    });
+
+    const tokenChecks: Array<{ symbol: string; addr: `0x${string}`; decimals: number }> = [
+      { symbol: "USDm", addr: getTokenAddress(CHAIN_ID, "USDm") as `0x${string}`, decimals: 18 },
+      { symbol: "USDC", addr: getTokenAddress(CHAIN_ID, "USDC") as `0x${string}`, decimals: 6  },
+      { symbol: "USDT", addr: getTokenAddress(CHAIN_ID, "USDT") as `0x${string}`, decimals: 6  },
+    ];
 
     const MIN_ALLOWANCE = parseFloat(process.env.MIN_REQUIRED_ALLOWANCE_USD ?? "5");
-    const allowanceUSD  = Number(allowance) / 1e18;
 
-    if (allowanceUSD < MIN_ALLOWANCE) {
-      logger.warn("cycle: allowance too low or revoked", { goalId, allowanceUSD });
+    const allowances = await Promise.all(
+      tokenChecks.map(t => publicClient.readContract({
+        address: t.addr, abi: allowanceAbi,
+        functionName: "allowance",
+        args: [userWallet as `0x${string}`, executorAddr],
+      }))
+    );
 
-      if (goal.status !== "action_required") {
-        await setGoalActionRequired(goalId, "allowance_revoked");
-        const chatId = await getTelegramChatId(userWallet);
-        if (chatId) {
-          await insertNotification({
-            goalId,
-            telegramChatId: chatId,
-            type:           "allowance_revoked",
-            messageText:    `*Piggy Sentinel* ⚠️
+    for (let idx = 0; idx < tokenChecks.length; idx++) {
+      const { symbol, decimals } = tokenChecks[idx];
+      const allowanceUSD = Number(allowances[idx]) / Math.pow(10, decimals);
 
-I can no longer manage your savings — it looks like the spending permission was revoked.
+      if (allowanceUSD < MIN_ALLOWANCE) {
+        logger.warn("cycle: allowance too low or revoked", { goalId, symbol, allowanceUSD });
 
-*Action required:* Re-approve Piggy in the web app to resume automation.
-
-Your funds are safe and unchanged.`,
-          });
+        if (goal.status !== "action_required") {
+          await setGoalActionRequired(goalId, "allowance_revoked");
+          const chatId = await getTelegramChatId(userWallet);
+          if (chatId) {
+            await insertNotification({
+              goalId,
+              telegramChatId: chatId,
+              type:           "allowance_revoked",
+              messageText:    `*Piggy Sentinel* ⚠️\n\nI can no longer manage your savings — the spending permission for *${symbol}* was revoked.\n\n*Action required:* Re-approve Piggy in the web app to resume automation.\n\nYour funds are safe and unchanged.`,
+            });
+          }
         }
-      }
 
-      await insertAgentEvent({ goalId, agentWallet: executorAddr, status: "blocked", reason: "allowance_revoked" });
-      return;
+        await insertAgentEvent({ goalId, agentWallet: executorAddr, status: "blocked", reason: `allowance_revoked:${symbol}` });
+        return;
+      }
     }
 
-    // Check allowance expiry via contract (catches AllowanceExpired error)
+    // Check allowance expiry via contract
     try {
       const IS_ALLOWANCE_VALID_ABI = [{ name: "isAllowanceValid", type: "function", inputs: [{ name: "user", type: "address" }], outputs: [{ type: "bool" }], stateMutability: "view" }] as const;
       const isValid = await publicClient.readContract({
@@ -441,13 +447,7 @@ Your funds are safe and unchanged.`,
               goalId,
               telegramChatId: chatId,
               type:           "allowance_revoked",
-              messageText:    `*Piggy Sentinel* ⏰
-
-Your spending permission has expired.
-
-*Action required:* Re-approve Piggy in the web app to continue automation.
-
-Your funds are safe.`,
+              messageText:    `*Piggy Sentinel* ⏰\n\nYour spending permission has expired.\n\n*Action required:* Re-approve Piggy in the web app to continue automation.\n\nYour funds are safe.`,
             });
           }
         }
@@ -512,10 +512,11 @@ Top up your wallet with USDm to keep your savings on track.`,
   const blendedAPY       = optimalAlloc.blendedApy;
   const blendedAPYDec    = blendedAPY / 100;
 
-  // ── Step 1b: Auto-reset spend epoch if 30 days have passed ──────────────
-  // AUTONOMY FIX: without this, cumulativeSpent hits spendLimit and the agent
-  // permanently cannot execute any transaction for this user. The epoch resets
-  // monthly to restore the agent's operating budget.
+  // ── Step 1b: Auto-reset spend epoch if 30 days have passed ─────────────
+  // Agent reset otomatis setiap 30 hari untuk mempertahankan autonomi.
+  // Time constraint MIN_EPOCH_DURATION di-enforce ON-CHAIN di contract —
+  // kalau belum 30 hari, tx akan revert EpochResetTooSoon (bukan silent fail).
+  // Ini yang mencegah serangan: agent compromise tidak bisa reset berkali-kali.
   const epochStart = goal.epochStart ? new Date(goal.epochStart) : new Date(goal.createdAt ?? Date.now());
   const daysSinceEpoch = (Date.now() - epochStart.getTime()) / 86_400_000;
   if (daysSinceEpoch >= 30) {
@@ -856,45 +857,78 @@ Top up your wallet with USDm to keep your savings on track.`,
       let lastTxHash: string | undefined;
       let failed = false;
 
-      for (const action of rebalanceResult.actions) {
-        try {
-          // Simulate before sending — prevents wasted gas on revert
-          const sim = await simulateTransaction({
-            to:          action.to,
-            data:        action.data,
-            value:       action.value,
-            description: action.description,
-          }).catch(() => null);
-
-          if (sim && !sim.success) {
-            logger.error(`cycle: simulation failed — skipping tx`, {
-              goalId,
-              description: action.description,
-              reason: sim.revertReason ?? "unknown",
-            });
-            failed = true;
-            break;
-          }
-
-          const txHash = await submitTransaction(action);
-          lastTxHash = txHash;
-          logger.info(`cycle: tx confirmed — ${action.description}`, { goalId, txHash });
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          logger.error(`cycle: tx failed — ${action.description}`, msg);
+      // B4 FIX: call rebalance() gate on-chain SEBELUM execute actions.
+      // Versi lama: agent bisa langsung call executeAaveSupply/LP tanpa lewat
+      // rebalance() — 24h frequency limit hanya di-enforce di DB layer.
+      // Fix: submit rebalance() tx dulu. Kalau revert RebalanceTooSoon,
+      // skip semua actions untuk cycle ini — contract yang enforce timing.
+      try {
+        const rebalanceTx = await submitTransaction({
+          to:    executorAddr,
+          data:  encodeFunctionData({
+            abi:          SENTINEL_EXECUTOR_ABI,
+            functionName: "rebalance",
+            args:         [userWallet as `0x${string}`],
+          }),
+          value: 0n,
+          description: "rebalance gate",
+        });
+        logger.info("cycle: rebalance gate confirmed", { goalId, txHash: rebalanceTx });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.includes("RebalanceTooSoon")) {
+          logger.info("cycle: rebalance gate — too soon (on-chain), skipping actions", { goalId });
+          await updateExecution(execId, "failed");
+          // Lanjut ke intelligence layer — user tetap dapat progress update
           failed = true;
-          break;
+        } else {
+          logger.error("cycle: rebalance gate tx failed", msg);
+          await updateExecution(execId, "failed");
+          failed = true;
         }
       }
 
-      await updateExecution(execId, failed ? "failed" : "confirmed", lastTxHash);
-
       if (!failed) {
-        logger.info(`cycle: rebalance complete`, {
-          goalId,
-          actionsExecuted: rebalanceResult.actions.length,
-          newApy:          `${rebalanceResult.estimatedNewApy.toFixed(2)}%`,
-        });
+        for (const action of rebalanceResult.actions) {
+          try {
+            // Simulate before sending — prevents wasted gas on revert
+            const sim = await simulateTransaction({
+              to:          action.to,
+              data:        action.data,
+              value:       action.value,
+              description: action.description,
+            }).catch(() => null);
+
+            if (sim && !sim.success) {
+              logger.error(`cycle: simulation failed — skipping tx`, {
+                goalId,
+                description: action.description,
+                reason: sim.revertReason ?? "unknown",
+              });
+              failed = true;
+              break;
+            }
+
+            const txHash = await submitTransaction(action);
+            lastTxHash = txHash;
+            logger.info(`cycle: tx confirmed — ${action.description}`, { goalId, txHash });
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            logger.error(`cycle: tx failed — ${action.description}`, msg);
+            failed = true;
+            break;
+          }
+        }
+
+        await updateExecution(execId, failed ? "failed" : "confirmed", lastTxHash);
+
+        if (!failed) {
+          logger.info(`cycle: rebalance complete`, {
+            goalId,
+            actionsExecuted: rebalanceResult.actions.length,
+            newApy:          `${rebalanceResult.estimatedNewApy.toFixed(2)}%`,
+          });
+        }
       }
     }
   }

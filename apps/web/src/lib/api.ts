@@ -1,10 +1,32 @@
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
 
-async function req<T = unknown>(path: string, options?: RequestInit): Promise<T> {
+// ── Authenticated request helper ─────────────────────────────────────────────
+// All API calls that touch user data require a Privy Bearer token.
+// Pass the token from usePrivy().getAccessToken() into api methods.
+//
+// Usage in a page component:
+//   const { getAccessToken } = usePrivy();
+//   const token = await getAccessToken();
+//   const goal = await api.getGoalStatus(token);
+
+async function req<T = unknown>(
+  path:    string,
+  token:   string | null,
+  options?: RequestInit,
+): Promise<T> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+
   const res = await fetch(`${API}${path}`, {
-    headers: { "Content-Type": "application/json" },
+    headers,
     ...options,
   });
+
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`);
@@ -51,22 +73,28 @@ export interface GoalHistory {
 }
 
 // ── API client ────────────────────────────────────────────────────────────────
+// Every method that reads or writes user data takes `token` as its first arg.
+// The token is a Privy access token — get it with `await getAccessToken()`
+// from the usePrivy() hook.
+//
+// The server ignores any wallet address in the request body or query string —
+// it uses the wallet address from the verified token only.
 
 export const api = {
-  // Goals
-  getGoalStatus: (wallet: string) =>
+  // Goals — all require auth token
+  getGoalStatus: (token: string | null) =>
     req<GoalData | { status: "no_active_goal" }>(
-      `/api/goals/status?wallet=${encodeURIComponent(wallet)}`
+      "/api/goals/status",
+      token,
     ),
 
-  getGoalHistory: (wallet: string) =>
-    req<GoalHistory>(`/api/goals/history?wallet=${encodeURIComponent(wallet)}`),
+  getGoalHistory: (token: string | null) =>
+    req<GoalHistory>("/api/goals/history", token),
 
-  getAllGoals: (wallet: string) =>
-    req<GoalData[]>(`/api/goals/all?wallet=${encodeURIComponent(wallet)}`),
+  getAllGoals: (token: string | null) =>
+    req<GoalData[]>("/api/goals/all", token),
 
-  createGoal: (body: {
-    ownerWallet:         string;
+  createGoal: (token: string | null, body: {
     agentWalletAddress:  string;
     targetAmount:        string;
     targetCurrency:      string;
@@ -77,64 +105,73 @@ export const api = {
     weeklyContribution?: string;
     contributionPattern?:"recurring" | "manual";
     goalName?:           string;
+    // ownerWallet is NOT included — the server derives it from your token
   }) =>
     req<{ goal: GoalData; strategy: unknown; approvalAmount: string }>(
       "/api/goals/create",
-      { method: "POST", body: JSON.stringify(body) }
+      token,
+      { method: "POST", body: JSON.stringify(body) },
     ),
 
-  activateGoal: (id: string) =>
+  activateGoal: (token: string | null, id: string) =>
     req<{ goalId: string; status: string }>(
       `/api/goals/${id}/activate`,
-      { method: "POST", body: JSON.stringify({}) }
+      token,
+      { method: "POST", body: JSON.stringify({}) },
     ),
 
-  pauseGoal: (id: string, wallet: string) =>
+  pauseGoal: (token: string | null, id: string) =>
     req<{ goalId: string; status: string }>(
       `/api/goals/${id}/pause`,
-      { method: "POST", body: JSON.stringify({ wallet }) }
+      token,
+      { method: "POST", body: JSON.stringify({}) },
     ),
 
-  resumeGoal: (id: string, wallet: string) =>
+  resumeGoal: (token: string | null, id: string) =>
     req<{ goalId: string; status: string }>(
       `/api/goals/${id}/resume`,
-      { method: "POST", body: JSON.stringify({ wallet }) }
+      token,
+      { method: "POST", body: JSON.stringify({}) },
     ),
 
-  withdrawGoal: (id: string, txHash?: string) =>
+  withdrawGoal: (token: string | null, id: string, txHash?: string) =>
     req<{ goalId: string; status: string; execId: string }>(
       `/api/goals/${id}/withdraw`,
-      { method: "POST", body: JSON.stringify({ txHash: txHash ?? null }) }
+      token,
+      { method: "POST", body: JSON.stringify({ txHash: txHash ?? null }) },
     ),
 
-  reactivateGoal: (id: string) =>
+  reactivateGoal: (token: string | null, id: string) =>
     req<{ goalId: string; status: string }>(
       `/api/goals/${id}/reactivate`,
-      { method: "POST", body: JSON.stringify({}) }
+      token,
+      { method: "POST", body: JSON.stringify({}) },
     ),
 
-  getAgentStatus: (goalId: string) =>
+  getAgentStatus: (token: string | null, goalId: string) =>
     req<{
       latest: { status: string; reason: string | null; cycle_at: string } | null;
       recent: Array<{ status: string; reason: string | null; cycle_at: string }>;
-    }>(`/api/goals/${goalId}/agent-status`),
+    }>(`/api/goals/${goalId}/agent-status`, token),
 
-  completeGoalAction: (id: string, action: "withdraw" | "continue" | "new_goal") =>
+  completeGoalAction: (token: string | null, id: string, action: "withdraw" | "continue" | "new_goal") =>
     req<{ goalId: string; action: string; execId?: string }>(
       `/api/goals/${id}/complete-action`,
-      { method: "POST", body: JSON.stringify({ action }) }
+      token,
+      { method: "POST", body: JSON.stringify({ action }) },
     ),
 
-  // Telegram
+  // Telegram (no auth needed — public link flow)
   requestTelegramLink: (wallet: string) =>
-    req<{ code: string; expiresAt: string }>("/api/telegram/request-link", {
+    req<{ code: string; expiresAt: string }>("/api/telegram/request-link", null, {
       method: "POST",
       body: JSON.stringify({ walletAddress: wallet }),
     }),
 
-  // Chat usage
-  getChatLimit: (wallet: string) =>
+  // Chat — uses x-payment header, not Bearer token
+  getChatLimit: (token: string | null) =>
     req<{ used: number; freeLimit: number; remaining: number; isPaidTier: boolean }>(
-      `/api/chat/limit?wallet=${encodeURIComponent(wallet)}`
+      "/api/chat/limit",
+      token,
     ),
 };

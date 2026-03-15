@@ -304,12 +304,19 @@ function buildUniswapLP(
   totalUSD:     bigint,
   portfolioUSD: bigint,
 ): TxCalldata {
+  // SLIPPAGE FIX: hitung amount0Min dan amount1Min sebagai 99% dari amount.
+  // Ini mencegah MEV sandwich attack — kalau harga bergerak > 1%, tx revert
+  // dan tidak ada dana yang hilang ke sandwich bot.
+  // 1% tolerance dipilih karena ini full-range LP (stable pairs bisa lebih ketat).
+  const amount0Min = (amount0 * 99n) / 100n;
+  const amount1Min = (amount1 * 99n) / 100n;
+
   return {
     to:   executor,
     data: encodeFunctionData({
       abi:          SENTINEL_EXECUTOR_ABI,
       functionName: "executeUniswapLP",
-      args:         [user, token0, token1, amount0, amount1, totalUSD, portfolioUSD],
+      args:         [user, token0, token1, amount0, amount1, amount0Min, amount1Min, totalUSD, portfolioUSD],
     }),
     value:       0n,
     description: `Uniswap LP ${formatUnits(amount0, 18)} USDC + ${formatUnits(amount1, 18)} WETH`,

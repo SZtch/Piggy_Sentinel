@@ -30,9 +30,8 @@ function StatusDot({ status }: { status: string }) {
 }
 
 export default function DashboardPage() {
-  const { ready, authenticated, user } = usePrivy();
+  const { ready, authenticated, user, getAccessToken } = usePrivy();
   const router  = useRouter();
-  const address = user?.wallet?.address;
 
   const [goal,        setGoal]        = useState<GoalData | null>(null);
   const [executions,  setExecutions]  = useState<ExecutionEntry[]>([]);
@@ -41,19 +40,26 @@ export default function DashboardPage() {
   const [pausing,     setPausing]     = useState(false);
   const [refreshing,  setRefreshing]  = useState(false);
 
-  async function fetchData(addr: string, silent = false) {
+  // All API calls get a fresh token. getAccessToken() returns a cached JWT
+  // and only fetches a new one when the current token is near expiry.
+  async function getToken() {
+    return getAccessToken();
+  }
+
+  async function fetchData(silent = false) {
     if (!silent) setLoading(true); else setRefreshing(true);
     try {
+      const token = await getToken();
       const [gs, hist] = await Promise.all([
-        api.getGoalStatus(addr),
-        api.getGoalHistory(addr),
+        api.getGoalStatus(token),
+        api.getGoalHistory(token),
       ]);
       const g = (gs as { status?: string }).status === "no_active_goal" ? null : gs as GoalData;
       setGoal(g);
       setExecutions((hist as GoalHistory).executions ?? []);
       if (g?.id) {
         try {
-          const ev = await api.getAgentStatus(g.id);
+          const ev = await api.getAgentStatus(token, g.id);
           setAgentStatus(ev?.latest ?? null);
         } catch {}
       }
@@ -64,18 +70,18 @@ export default function DashboardPage() {
   useEffect(() => {
     if (!ready) return;
     if (!authenticated) { router.push("/"); return; }
-    if (!address) return;
-    fetchData(address);
-    const iv = setInterval(() => fetchData(address, true), 30_000);
+    fetchData();
+    const iv = setInterval(() => fetchData(true), 30_000);
     return () => clearInterval(iv);
-  }, [ready, authenticated, address]);
+  }, [ready, authenticated]);
 
   async function togglePause() {
     if (!goal) return;
     setPausing(true);
     try {
-      if (goal.soft_paused) await api.resumeGoal(goal.id);
-      else await api.pauseGoal(goal.id);
+      const token = await getToken();
+      if (goal.soft_paused) await api.resumeGoal(token, goal.id);
+      else await api.pauseGoal(token, goal.id);
       setGoal(g => g ? { ...g, soft_paused: !g.soft_paused } : null);
     } catch {}
     finally { setPausing(false); }
@@ -103,7 +109,7 @@ export default function DashboardPage() {
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           {refreshing && <span style={{ fontSize: 11, color: "var(--text3)", alignSelf: "center" }}>syncing…</span>}
-          <button className="btn btn-ghost btn-sm" onClick={() => address && fetchData(address)}>↻</button>
+          <button className="btn btn-ghost btn-sm" onClick={() => fetchData()}>↻</button>
           {goal && goal.status === "active" && (
             <>
               <button className="btn btn-secondary btn-sm" onClick={togglePause} disabled={pausing}>
@@ -131,7 +137,6 @@ export default function DashboardPage() {
 
       {!loading && !goal && (
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, alignItems: "start" }}>
-          {/* Left: CTA */}
           <div className="card" style={{ padding: "32px 28px" }}>
             <div style={{ marginBottom: 20 }}>
               <div style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--text3)", marginBottom: 10, letterSpacing: "0.06em" }}>
@@ -145,43 +150,10 @@ export default function DashboardPage() {
                 and notifies you on milestones. Funds stay in your wallet.
               </p>
             </div>
-
-            {/* Mini strategy preview */}
-            <div style={{ marginBottom: 20, padding: "14px", background: "var(--bg3)", borderRadius: 6 }}>
-              <div style={{ fontSize: 10, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 10, fontFamily: "var(--mono)" }}>
-                Default strategy
-              </div>
-              {[
-                { l: "USDT → Aave", p: "60%", c: "var(--green)",  apy: "8.89%" },
-                { l: "USDC → Aave", p: "30%", c: "var(--blue)",   apy: "2.61%" },
-                { l: "USDm → Aave", p: "10%", c: "#7C6EF5",       apy: "1.07%" },
-              ].map(a => (
-                <div key={a.l} style={{ display: "flex", justifyContent: "space-between", marginBottom: 6, fontSize: 12 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-                    <span style={{ width: 5, height: 5, borderRadius: "50%", background: a.c, display: "inline-block" }} />
-                    <span style={{ fontFamily: "var(--mono)", color: "var(--text2)" }}>{a.l}</span>
-                  </div>
-                  <div style={{ display: "flex", gap: 14 }}>
-                    <span style={{ fontFamily: "var(--mono)", color: "var(--text3)" }}>{a.apy}</span>
-                    <span style={{ fontFamily: "var(--mono)", color: "var(--text)", fontWeight: 600 }}>{a.p}</span>
-                  </div>
-                </div>
-              ))}
-              <div style={{ borderTop: "1px solid var(--border)", marginTop: 10, paddingTop: 10, display: "flex", justifyContent: "space-between", fontSize: 12 }}>
-                <span style={{ fontFamily: "var(--mono)", color: "var(--text3)" }}>Blended APY</span>
-                <span style={{ fontFamily: "var(--mono)", color: "var(--green)", fontWeight: 600 }}>~6.22%</span>
-              </div>
-            </div>
-
             <button className="btn btn-primary" onClick={() => router.push("/enable")} style={{ width: "100%" }}>
               Set up a goal →
             </button>
-            <div style={{ marginTop: 10, fontSize: 11, color: "var(--text3)", textAlign: "center", fontFamily: "var(--mono)" }}>
-              1× wallet approval · funds stay in your wallet
-            </div>
           </div>
-
-          {/* Right: how it works steps */}
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {[
               { n: "01", t: "Set your goal",   d: "Name it, set a target and deadline. Penny figures out the strategy." },
@@ -205,7 +177,6 @@ export default function DashboardPage() {
 
       {!loading && goal && (
         <>
-          {/* ── Stats row ───────────────────────────────────────────── */}
           <div style={{
             display: "grid", gridTemplateColumns: "repeat(4, 1fr)",
             gap: 0, marginBottom: 16,
@@ -213,11 +184,11 @@ export default function DashboardPage() {
             background: "var(--border)",
           }}>
             {[
-              { l: "Balance",    v: `$${currentAmt.toFixed(2)}`,         sub: `of $${targetAmt.toFixed(0)} goal` },
+              { l: "Balance",     v: `$${currentAmt.toFixed(2)}`,         sub: `of $${targetAmt.toFixed(0)} goal` },
               { l: "Blended APY", v: `${goal.strategy_json?.expectedApyMin ?? 5.5}–${goal.strategy_json?.expectedApyMax ?? 7.0}%`, sub: "stable yield", green: true },
               { l: "Yield Earned", v: `+$${yieldAmt.toFixed(2)}`,         sub: "since activation", green: true },
               { l: "Days Left",   v: `${daysLeft}d`,                      sub: new Date(goal.deadline).toLocaleDateString("en-US", { month: "short", day: "numeric" }) },
-            ].map((s, i) => (
+            ].map((s) => (
               <div key={s.l} style={{ padding: "18px 20px", background: "var(--bg2)" }}>
                 <div className="stat-label" style={{ marginBottom: 6 }}>{s.l}</div>
                 <div className="stat-value" style={{ color: s.green ? "var(--green)" : "var(--text)", fontSize: 18 }}>{s.v}</div>
@@ -226,8 +197,6 @@ export default function DashboardPage() {
             ))}
           </div>
 
-
-          {/* ── Guardian status ──────────────────────────────────── */}
           <div className="card" style={{ padding: "14px 16px", marginBottom: 12 }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -259,30 +228,9 @@ export default function DashboardPage() {
                 )}
               </div>
             </div>
-            <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
-              {[
-                { l: "peg monitor",     ok: agentStatus?.status !== "blocked" || !agentStatus?.reason?.includes("peg") },
-                { l: "risk score",      ok: agentStatus?.status !== "blocked" || !agentStatus?.reason?.includes("risk") },
-                { l: "protocol health", ok: agentStatus?.status !== "blocked" || !agentStatus?.reason?.includes("protocol") },
-                { l: "spend limit",     ok: true },
-                { l: "non-custodial",   ok: true },
-              ].map(g => (
-                <span key={g.l} style={{
-                  fontSize: 10, fontFamily: "var(--mono)", padding: "2px 8px", borderRadius: 4,
-                  background: g.ok ? "rgba(0,212,168,0.08)" : "rgba(240,96,96,0.08)",
-                  color:      g.ok ? "var(--green)"         : "#F06060",
-                  border:     `1px solid ${g.ok ? "rgba(0,212,168,0.2)" : "rgba(240,96,96,0.2)"}`,
-                }}>
-                  {g.ok ? "✓" : "✕"} {g.l}
-                </span>
-              ))}
-            </div>
           </div>
 
-          {/* ── Progress + Allocation ─────────────────────────────── */}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
-
-            {/* Progress */}
             <div className="card" style={{ padding: "20px" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
                 <div>
@@ -304,27 +252,18 @@ export default function DashboardPage() {
               </div>
             </div>
 
-            {/* Allocation */}
             <div className="card" style={{ padding: "20px" }}>
               <div className="stat-label" style={{ marginBottom: 14 }}>Strategy allocation</div>
-
-              {/* Bar */}
               <div style={{ height: 4, display: "flex", gap: 2, marginBottom: 14, borderRadius: 2, overflow: "hidden" }}>
                 {ALLOC.map(a => (
                   <div key={a.label} style={{ flex: a.pct, background: a.color }} />
                 ))}
               </div>
-
-              {/* Rows */}
               {ALLOC.map(a => (
-                <div key={a.label} style={{
-                  display: "flex", alignItems: "center", justifyContent: "space-between",
-                  marginBottom: 8, fontSize: 12,
-                }}>
+                <div key={a.label} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8, fontSize: 12 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
                     <span style={{ width: 6, height: 6, borderRadius: "50%", background: a.color, display: "inline-block" }} />
                     <span style={{ fontFamily: "var(--mono)", color: "var(--text2)" }}>{a.label}</span>
-                    <span style={{ color: "var(--text3)" }}>via Aave</span>
                   </div>
                   <div style={{ display: "flex", gap: 12 }}>
                     <span style={{ fontFamily: "var(--mono)", color: "var(--text3)" }}>{a.apy}</span>
@@ -332,29 +271,14 @@ export default function DashboardPage() {
                   </div>
                 </div>
               ))}
-
-              <div style={{
-                marginTop: 12, paddingTop: 12,
-                borderTop: "1px solid var(--border)",
-                display: "flex", justifyContent: "space-between",
-                fontSize: 12,
-              }}>
-                <span style={{ color: "var(--text3)" }}>Blended APY</span>
-                <span style={{ fontFamily: "var(--mono)", color: "var(--green)", fontWeight: 600 }}>~6.22%</span>
-              </div>
             </div>
           </div>
 
-          {/* ── Activity feed ────────────────────────────────────────── */}
           <div className="card">
-            <div style={{
-              display: "flex", justifyContent: "space-between", alignItems: "center",
-              padding: "12px 16px", borderBottom: "1px solid var(--border)",
-            }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 16px", borderBottom: "1px solid var(--border)" }}>
               <div style={{ fontSize: 13, fontWeight: 500, color: "var(--text)" }}>Recent activity</div>
               <button className="btn btn-ghost btn-sm" onClick={() => router.push("/activity")}>View all →</button>
             </div>
-
             {executions.length === 0 ? (
               <div style={{ padding: "32px", textAlign: "center", color: "var(--text3)", fontSize: 13 }}>
                 No activity yet — Piggy will start soon.
@@ -362,24 +286,13 @@ export default function DashboardPage() {
             ) : (
               <table className="table" style={{ width: "100%" }}>
                 <thead>
-                  <tr>
-                    <th>Action</th>
-                    <th>Time</th>
-                    <th>Status</th>
-                    <th></th>
-                  </tr>
+                  <tr><th>Action</th><th>Time</th><th>Status</th><th></th></tr>
                 </thead>
                 <tbody>
                   {executions.slice(0, 6).map(h => (
                     <tr key={h.id}>
-                      <td>
-                        <span style={{ fontFamily: "var(--mono)", color: "var(--text)", fontSize: 12 }}>
-                          {SKILL_LABEL[h.skill_name] ?? h.skill_name}
-                        </span>
-                      </td>
-                      <td style={{ fontFamily: "var(--mono)", fontSize: 12 }}>
-                        {new Date(h.created_at).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
-                      </td>
+                      <td><span style={{ fontFamily: "var(--mono)", color: "var(--text)", fontSize: 12 }}>{SKILL_LABEL[h.skill_name] ?? h.skill_name}</span></td>
+                      <td style={{ fontFamily: "var(--mono)", fontSize: 12 }}>{new Date(h.created_at).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</td>
                       <td>
                         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                           <StatusDot status={h.status} />

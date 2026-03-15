@@ -137,24 +137,29 @@ contract UniswapAdapter {
     // Collect max amounts — collect all available fees/tokens
     uint128 public constant COLLECT_MAX = type(uint128).max;
 
-    // wETH on Celo mainnet
-    // FIX: address WETH yang benar di Celo mainnet (confirmed dari Celoscan: "Celo: WETH Token")
-    address public constant WETH_CELO = 0xD221812de1BD094f35587EE8E174B07B6167D9Af;
+    // A4 FIX: wETH address sekarang configurable, bukan hardcoded constant.
+    // Versi lama: address(0xD221812...) hardcoded — tidak sinkron dengan
+    // SentinelExecutor.wETH yang bisa diupdate via setVolatileAssets().
+    // Fix: set saat konstruktor, bisa diupdate oleh owner kalau perlu.
+    address public weth;
 
     error NotExecutor();
     error NotOwner();
     error ZeroAddress();
 
     event ExecutorUpdated(address indexed oldExecutor, address indexed newExecutor);
+    event WethUpdated(address indexed oldWeth, address indexed newWeth);
 
-    constructor(address _positionManager, address _swapRouter, address _executor) {
+    constructor(address _positionManager, address _swapRouter, address _executor, address _weth) {
         require(_positionManager != address(0), "UniswapAdapter: zero positionManager");
         require(_swapRouter      != address(0), "UniswapAdapter: zero swapRouter");
         require(_executor        != address(0), "UniswapAdapter: zero executor");
+        require(_weth            != address(0), "UniswapAdapter: zero weth");
         positionManager = IUniswapV3PositionManager(_positionManager);
         swapRouter      = ISwapRouter(_swapRouter);
         executor        = _executor;
         owner           = msg.sender;
+        weth            = _weth;
     }
 
     modifier onlyExecutor() { if (msg.sender != executor) revert NotExecutor(); _; }
@@ -164,6 +169,13 @@ contract UniswapAdapter {
         if (_executor == address(0)) revert ZeroAddress();
         emit ExecutorUpdated(executor, _executor);
         executor = _executor;
+    }
+
+    // A4 FIX: owner bisa update weth address agar sinkron dengan SentinelExecutor.wETH
+    function setWeth(address _weth) external onlyOwner {
+        if (_weth == address(0)) revert ZeroAddress();
+        emit WethUpdated(weth, _weth);
+        weth = _weth;
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -192,7 +204,9 @@ contract UniswapAdapter {
         address token0,
         address token1,
         uint256 amount0,
-        uint256 amount1
+        uint256 amount1,
+        uint256 amount0Min,
+        uint256 amount1Min
     ) external onlyExecutor returns (uint256 tokenId) {
         // Pull tokens from SentinelExecutor (msg.sender) into this adapter
         IERC20(token0).safeTransferFrom(msg.sender, address(this), amount0);
@@ -216,9 +230,9 @@ contract UniswapAdapter {
                 tickUpper:      TICK_UPPER,
                 amount0Desired: amount0,
                 amount1Desired: amount1,
-                amount0Min:     0,           // slippage handled upstream in SentinelExecutor
-                amount1Min:     0,
-                recipient:      address(this), // NFT ke adapter — agar exitPosition() bisa jalan
+                amount0Min:     amount0Min,  // SLIPPAGE FIX: dikirim dari SentinelExecutor
+                amount1Min:     amount1Min,  // MEV sandwich protection aktif
+                recipient:      address(this),
                 deadline:       block.timestamp + 300
             })
         );
@@ -317,7 +331,7 @@ contract UniswapAdapter {
     // Internal
     // ─────────────────────────────────────────────────────────────────────────
 
-    function _isWETH(address token) internal pure returns (bool) {
-        return token == WETH_CELO;
+    function _isWETH(address token) internal view returns (bool) {
+        return token == weth;
     }
 }

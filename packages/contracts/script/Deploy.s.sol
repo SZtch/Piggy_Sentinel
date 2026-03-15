@@ -45,7 +45,9 @@ contract Deploy is Script {
 
         AaveAdapter    aaveAdapter    = new AaveAdapter(AAVE_POOL, tempExecutor);
         MentoAdapter   mentoAdapter   = new MentoAdapter(MENTO_BROKER, tempExecutor);
-        UniswapAdapter uniswapAdapter = new UniswapAdapter(UNISWAP_PM, UNISWAP_SWAP_ROUTER, tempExecutor);
+        // A4 FIX: pass WETH address ke UniswapAdapter constructor
+        // agar sinkron dengan SentinelExecutor.wETH — satu source of truth
+        UniswapAdapter uniswapAdapter = new UniswapAdapter(UNISWAP_PM, UNISWAP_SWAP_ROUTER, tempExecutor, WETH);
 
         // ── Step 2: Deploy SentinelExecutor ──────────────────────────────────
         SentinelExecutor sentinel = new SentinelExecutor(
@@ -66,6 +68,12 @@ contract Deploy is Script {
         sentinel.setWhitelistedAsset(USDT, true);
         sentinel.setWhitelistedAsset(USDC, true);
         sentinel.setWhitelistedAsset(WETH, true);
+
+        // ── Step 4b: Set decimals per asset (A5 fix) ──────────────────────────
+        sentinel.setAssetDecimals(USDM, 18);
+        sentinel.setAssetDecimals(USDT, 6);
+        sentinel.setAssetDecimals(USDC, 6);
+        sentinel.setAssetDecimals(WETH, 18);
 
         // ── Step 5: Set WETH sebagai volatile asset ───────────────────────────
         sentinel.setVolatileAssets(WETH);

@@ -62,10 +62,16 @@ abstract contract ReentrancyGuard {
  *     → NEVER holds user funds
  *
  * Non-custodial:
- *   Aave aTokens  → minted directly to userWallet
- *   Uniswap LP    → NFT minted directly to userWallet
- *   wETH          → Uniswap LP positions
- *   This contract → never holds funds at rest
+ *   Smart contract holds yield positions on behalf of users — same model as
+ *   Yearn Finance and other DeFi vaults. No human (agent, owner, or anyone)
+ *   has discretionary control over user funds. All movements are governed
+ *   by smart contract rules only.
+ *
+ *   Aave aTokens  → held by SentinelExecutor on behalf of userWallet
+ *   Uniswap LP    → NFT held by UniswapAdapter as escrow for userWallet
+ *   Mento output  → sent directly to userWallet
+ *   This contract → never holds funds permanently; positions always redeemable
+ *                   by user via withdraw() at any time, even when paused
  */
 contract SentinelExecutor is ReentrancyGuard {
 
@@ -89,6 +95,13 @@ contract SentinelExecutor is ReentrancyGuard {
     address public wETH;
     address public usdm;   // input asset — semua withdrawal diconvert balik ke USDm
 
+    // A5 FIX: decimal registry per asset.
+    // principalDeposited menyimpan semua amount dalam 18 desimal (normalized).
+    // Tanpa ini: USDm (18dec) + USDC (6dec) top-up tidak comparable —
+    // 50e6 USDC hilang di noise 100e18 USDm.
+    // Setiap whitelisted asset harus di-set decimals-nya via setAssetDecimals().
+    mapping(address => uint8) public assetDecimals;
+
     // ─────────────────────────────────────────────
     // Asset Whitelist
     // ─────────────────────────────────────────────
@@ -106,6 +119,7 @@ contract SentinelExecutor is ReentrancyGuard {
     uint256 public constant MAX_SLIPPAGE_BPS        = 100;    // 1%
     uint256 public constant PERFORMANCE_FEE_BPS     = 2000;   // 20%
     uint256 public constant BPS_DENOMINATOR         = 10_000;
+    uint256 public constant MIN_EPOCH_DURATION      = 30 days; // minimum antara dua epoch reset
 
     // ─────────────────────────────────────────────
     // Strategy Allocation (per user)
@@ -175,10 +189,73 @@ contract SentinelExecutor is ReentrancyGuard {
      */
     mapping(address => mapping(address => uint256)) public userATokenShares;
 
+    /**
+     * @notice Total aToken shares across ALL users per underlying asset.
+     *         totalATokenShares[asset] = sum of userATokenShares[*][asset]
+     *
+     * YIELD FIX: Aave aTokens rebase — balanceOf(aToken, address(this)) grows over time.
+     * To give each user their correct proportion including accrued yield, we compute:
+     *
+     *   userLiveAmount = (balanceOf(aToken, address(this)) * userShares) / totalATokenShares[asset]
+     *
+     * Without this, withdraw() returns only the original principal and all yield is lost
+     * in the contract with no owner.
+     *
+     * Updated in lockstep with userATokenShares via _addATokenShares / _subATokenShares.
+     */
+    mapping(address => uint256) public totalATokenShares;
+
+    /**
+     * @notice Per-user escrow for tokens parked in this contract during LP sequences.
+     *         parkedFunds[user][token] = amount milik user yang sedang "in-flight"
+     *         antara executeAaveWithdraw → executeUniswapSwap / executeUniswapLP.
+     *
+     * FUND MIXING FIX:
+     *   Versi lama pakai balanceOf(address(this)) secara global — tidak per-user.
+     *   Kalau dua user menjalankan LP sequence secara concurrent:
+     *     - User A: executeAaveWithdraw → 1000 USDC parkir di kontrak
+     *     - User B: executeUniswapLP → lihat balanceOf = 1000, pakai dana User A!
+     *
+     *   Fix: setiap token yang masuk via executeAaveWithdraw dicatat ke
+     *   parkedFunds[userWallet][asset]. executeUniswapLP dan executeUniswapSwap
+     *   hanya konsumsi dari slot user sendiri, bukan dari balanceOf global.
+     *
+     * Lifecycle:
+     *   + executeAaveWithdraw()  → parkedFunds[user][asset] += withdrawn
+     *   - executeUniswapLP()     → parkedFunds[user][token] -= dipakai
+     *   - executeUniswapSwap()   → parkedFunds[user][token] -= dipakai
+     *   - forwardToUser()        → kirim parkedFunds[user][*] ke userWallet, reset ke 0
+     */
+    mapping(address => mapping(address => uint256)) public parkedFunds;
 
     /// @notice Optional allowance expiry per user (unix timestamp, 0 = no expiry).
     ///         Set via setAllowanceExpiry(). Agent checks isAllowanceValid() each cycle.
     mapping(address => uint256) public allowanceExpiry;
+
+    // ─────────────────────────────────────────────
+    // Agent Signer Timelock
+    // ─────────────────────────────────────────────
+
+    /**
+     * @notice Pending agent signer + timelock untuk rotasi key yang aman.
+     *
+     * Flow:
+     *   1. Owner call proposeAgentSigner(newKey)  → mulai 48h countdown
+     *   2. Setelah 48h, owner call executeAgentSignerChange()  → key dirotasi
+     *
+     * Kenapa 48 jam:
+     *   Cukup waktu untuk user/monitor deteksi on-chain event AgentSignerProposed
+     *   dan react kalau rotasi tidak authorized. Agent lama tetap aktif dan
+     *   autonomous selama seluruh 48 jam — tidak ada downtime.
+     *
+     * Kalau owner key bocor dan attacker call proposeAgentSigner:
+     *   - Ada 48 jam window untuk deteksi
+     *   - Owner bisa call cancelAgentSignerChange() dari key backup / multisig
+     *   - Atau transfer ownership ke Safe dulu sebelum attacker execute
+     */
+    address public pendingAgentSigner;
+    uint256 public agentSignerChangeAt;
+    uint256 public constant AGENT_SIGNER_TIMELOCK = 48 hours;
 
     // ─────────────────────────────────────────────
     // Events
@@ -188,6 +265,8 @@ contract SentinelExecutor is ReentrancyGuard {
     event Paused(address indexed by);
     event Unpaused(address indexed by);
     event AgentSignerUpdated(address indexed oldSigner, address indexed newSigner);
+    event AgentSignerProposed(address indexed proposed, uint256 executeAt);
+    event AgentSignerChangeCancelled(address indexed cancelled);
     event OracleUpdated(address indexed oracle);
 
     // User lifecycle
@@ -196,6 +275,10 @@ contract SentinelExecutor is ReentrancyGuard {
     event Withdraw(address indexed user, address indexed asset, uint256 amount);
     event GoalCompleted(address indexed user, uint256 totalReturned, uint256 feeTaken);
     event EmergencyWithdraw(address indexed user, address indexed asset, uint256 amount);
+    /// @notice B2 FIX: emitted saat Mento swap gagal di withdraw() dan user
+    ///         menerima token as-is (bukan USDm). Frontend bisa monitor event
+    ///         ini untuk notify user bahwa token yang diterima bukan USDm.
+    event WithdrawFallback(address indexed user, address indexed asset, uint256 amount, string reason);
 
     // Strategy
     event StrategyExecuted(address indexed user, address indexed asset, uint256 amount, string protocol);
@@ -220,6 +303,9 @@ contract SentinelExecutor is ReentrancyGuard {
     error AssetNotWhitelisted(address asset);
     error UserPositionPaused(address user);
     error RebalanceTooSoon(uint256 nextAllowed);
+    error EpochResetTooSoon(uint256 nextAllowed);
+    error TimelockNotExpired(uint256 executeAt);
+    error NoPendingSignerChange();
     error LPAllocationExceeded(uint256 requested, uint256 max);
     error VolatileAllocationExceeded(uint256 requested, uint256 max);
     error AllocationSumInvalid(uint256 sum);
@@ -290,21 +376,33 @@ contract SentinelExecutor is ReentrancyGuard {
 
     /**
      * @notice Reset a user's spend epoch (cumulativeSpent → 0).
-     *         Called by the agent once per epoch period (e.g. monthly)
-     *         to restore the agent's ability to execute strategy after
-     *         the spend limit has been reached.
+     *         Dipanggil oleh agent secara otomatis setiap 30 hari untuk
+     *         mempertahankan autonomi — agent tetap bisa beroperasi tanpa
+     *         intervensi manual owner.
      *
-     * AUTONOMY FIX: without an epoch reset, cumulativeSpent only ever grows.
-     * Once it hits spendLimit, _checkAndUpdateSpend reverts permanently and
-     * the agent can never execute another transaction for that user.
-     * The agent calls this automatically at the start of each new epoch.
+     * SECURITY FIX — vulnerability lama: agent bisa reset kapan saja tanpa
+     * batas waktu, memungkinkan drain spendLimit berulang kali:
+     *   resetSpendEpoch → drain spendLimit → resetSpendEpoch → drain lagi → dst.
      *
-     * @dev Only callable by agent or owner. Not callable by arbitrary wallets.
+     * Fix: tambah time constraint MIN_EPOCH_DURATION (30 hari) on-chain.
+     * Agent tetap bisa panggil fungsi ini, tapi hanya setelah 30 hari berlalu.
+     * Worst case kalau agent key compromise: attacker drain maksimal 1x spendLimit
+     * per 30 hari — bukan unlimited. Ini bound yang acceptable vs kehilangan autonomi.
+     *
+     * Kenapa bukan onlyOwner:
+     *   onlyOwner memecah autonomi — agent berhenti setelah spendLimit mentok
+     *   dan butuh manual intervention setiap bulan. Itu bukan autonomous savings.
+     *
+     * @dev Callable by agent or owner. On-chain 30-day minimum enforced.
      */
     function resetSpendEpoch(address userWallet) external {
         if (msg.sender != agentSigner && msg.sender != owner) revert NotAgent();
         Position storage pos = positions[userWallet];
         if (pos.principalDeposited == 0) revert NoPosition();
+
+        uint256 nextAllowed = pos.epochStart + MIN_EPOCH_DURATION;
+        if (block.timestamp < nextAllowed) revert EpochResetTooSoon(nextAllowed);
+
         pos.cumulativeSpent = 0;
         pos.epochStart      = block.timestamp;
     }
@@ -332,10 +430,53 @@ contract SentinelExecutor is ReentrancyGuard {
     // Admin — Configuration
     // ─────────────────────────────────────────────
 
-    function setAgentSigner(address _agentSigner) external onlyOwner {
-        require(_agentSigner != address(0), "SentinelExecutor: zero agentSigner");
-        emit AgentSignerUpdated(agentSigner, _agentSigner);
-        agentSigner = _agentSigner;
+    /**
+     * @notice Step 1 — propose rotasi agent signer. Mulai 48h timelock.
+     *         Agent lama tetap aktif dan autonomous selama timelock berlangsung.
+     *         Tidak ada downtime, tidak ada gangguan ke user.
+     *
+     * On-chain event AgentSignerProposed bisa di-monitor oleh:
+     *   - User sendiri
+     *   - Off-chain monitoring service (e.g. OpenZeppelin Defender)
+     *   - Block explorer alert
+     *
+     * Kalau rotasi tidak authorized → call cancelAgentSignerChange()
+     * sebelum 48 jam untuk membatalkan.
+     */
+    function proposeAgentSigner(address _proposed) external onlyOwner {
+        require(_proposed != address(0), "SentinelExecutor: zero agentSigner");
+        require(_proposed != agentSigner, "SentinelExecutor: same as current");
+        pendingAgentSigner = _proposed;
+        agentSignerChangeAt = block.timestamp + AGENT_SIGNER_TIMELOCK;
+        emit AgentSignerProposed(_proposed, agentSignerChangeAt);
+    }
+
+    /**
+     * @notice Step 2 — execute rotasi setelah 48h timelock berlalu.
+     *         Agent lama masih valid sampai fungsi ini dipanggil.
+     */
+    function executeAgentSignerChange() external onlyOwner {
+        if (pendingAgentSigner == address(0)) revert NoPendingSignerChange();
+        if (block.timestamp < agentSignerChangeAt) revert TimelockNotExpired(agentSignerChangeAt);
+
+        address oldSigner  = agentSigner;
+        agentSigner        = pendingAgentSigner;
+        pendingAgentSigner = address(0);
+        agentSignerChangeAt = 0;
+
+        emit AgentSignerUpdated(oldSigner, agentSigner);
+    }
+
+    /**
+     * @notice Batalkan rotasi yang sedang pending.
+     *         Dipanggil kalau proposal tidak authorized atau ada perubahan rencana.
+     */
+    function cancelAgentSignerChange() external onlyOwner {
+        if (pendingAgentSigner == address(0)) revert NoPendingSignerChange();
+        address cancelled  = pendingAgentSigner;
+        pendingAgentSigner = address(0);
+        agentSignerChangeAt = 0;
+        emit AgentSignerChangeCancelled(cancelled);
     }
 
     function setTreasury(address _treasury) external onlyOwner {
@@ -354,6 +495,13 @@ contract SentinelExecutor is ReentrancyGuard {
     function setWhitelistedAsset(address asset, bool status) external onlyOwner {
         whitelistedAssets[asset] = status;
         emit AssetWhitelisted(asset, status);
+    }
+
+    // A5 FIX: set decimals untuk asset saat whitelist.
+    // Wajib dipanggil untuk setiap asset yang di-whitelist.
+    // Standard: USDm=18, USDC=6, USDT=6, WETH=18
+    function setAssetDecimals(address asset, uint8 decimals) external onlyOwner {
+        assetDecimals[asset] = decimals;
     }
 
     /**
@@ -432,7 +580,7 @@ contract SentinelExecutor is ReentrancyGuard {
             pos.epochStart      = block.timestamp;
         }
 
-        pos.principalDeposited += amount;
+        pos.principalDeposited += _normalizeTo18(asset, amount);
         pos.goalTarget          = goalTarget;
         pos.goalDeadline        = goalDeadline;
         pos.spendLimit          = spendLimit;
@@ -516,6 +664,9 @@ contract SentinelExecutor is ReentrancyGuard {
         // Kalau tidak ada langkah lanjutan, agent wajib panggil forwardToUser()
         // setelah selesai untuk kirim sisa dana ke userWallet.
         withdrawn = aaveAdapter.withdraw(userWallet, asset, amount, address(this));
+        // Catat ke parkedFunds — slot milik user ini saja, bukan pool global.
+        // Ini yang mencegah executeUniswapLP/Swap user lain memakai dana ini.
+        parkedFunds[userWallet][asset] += withdrawn;
         emit StrategyExecuted(userWallet, asset, withdrawn, "aave_withdraw");
     }
 
@@ -523,6 +674,11 @@ contract SentinelExecutor is ReentrancyGuard {
      * @notice Agent forward sisa token yang parkir di SentinelExecutor ke userWallet.
      *         Dipanggil setelah executeAaveWithdraw jika tidak ada operasi lanjutan,
      *         atau setelah seluruh rangkaian LP selesai.
+     *
+     * FUND MIXING FIX: sekarang baca dari parkedFunds[userWallet][asset],
+     * bukan dari balanceOf(address(this)). Ini memastikan hanya dana milik
+     * userWallet yang dikirim — bukan dana user lain yang kebetulan parkir
+     * di kontrak pada saat bersamaan.
      *
      * @param userWallet  Pemilik dana
      * @param assets      Daftar token yang mau di-forward
@@ -533,26 +689,16 @@ contract SentinelExecutor is ReentrancyGuard {
     ) external onlyAgent whenNotPaused userNotPaused(userWallet) {
         if (positions[userWallet].principalDeposited == 0) revert NoPosition();
 
-        // FIX KRITIS: jangan kirim seluruh balanceOf(this) karena bisa ada
-        // dana user lain yang juga parkir di kontrak saat LP sequence.
-        // Hanya kirim sesuai userATokenShares yang sudah di-sub sebelumnya,
-        // atau kalau tidak ada shares, kirim sesuai balance aktual tapi
-        // dibatasi dengan pendekatan konservatif.
-        //
-        // Cara aman: agent hanya panggil forwardToUser SETELAH seluruh
-        // sequence selesai dan tidak ada user lain yang concurrent.
-        // Untuk multi-user safety, kirim hanya amount yang tercatat
-        // di posisi user (principalDeposited sebagai proxy max).
         for (uint256 i = 0; i < assets.length; i++) {
-            uint256 bal = IERC20(assets[i]).balanceOf(address(this));
-            if (bal == 0) continue;
+            address asset  = assets[i];
+            uint256 parked = parkedFunds[userWallet][asset];
+            if (parked == 0) continue;
 
-            // Kirim maksimal sesuai principalDeposited user sebagai batas atas.
-            // Ini mencegah draining dana user lain yang sedang parkir.
-            uint256 maxForUser = positions[userWallet].principalDeposited;
-            uint256 toSend = bal > maxForUser ? maxForUser : bal;
+            // CEI: reset slot dulu sebelum transfer
+            parkedFunds[userWallet][asset] = 0;
 
-            if (toSend > 0) IERC20(assets[i]).safeTransfer(userWallet, toSend);
+            // Kirim hanya jumlah yang memang milik user ini
+            IERC20(asset).safeTransfer(userWallet, parked);
         }
     }
 
@@ -606,6 +752,11 @@ contract SentinelExecutor is ReentrancyGuard {
      *   - LP allocation <= user's lpAllocationBps (max 30%)
      *   - Volatile allocation <= 40%
      *   - Uses oracle price if set for more accurate portfolio valuation
+     *
+     * @param amount0Min  Minimum token0 yang harus masuk ke LP (slippage protection).
+     *                    Set ke 0 hanya untuk testing. Di prod, set ke ~99% dari amount0.
+     * @param amount1Min  Minimum token1 yang harus masuk ke LP (slippage protection).
+     *                    Kalau harga bergerak lebih dari tolerance → tx revert, bukan rugi.
      */
     function executeUniswapLP(
         address userWallet,
@@ -613,6 +764,8 @@ contract SentinelExecutor is ReentrancyGuard {
         address token1,
         uint256 amount0,
         uint256 amount1,
+        uint256 amount0Min,
+        uint256 amount1Min,
         uint256 totalValueUSD,
         uint256 totalPortfolioUSD
     )
@@ -652,22 +805,31 @@ contract SentinelExecutor is ReentrancyGuard {
 
         _checkAndUpdateSpend(userWallet, amount0 + amount1);
 
-        // Pull token0 — dari address(this) jika sudah ada, sisa dari userWallet
-        uint256 bal0 = IERC20(token0).balanceOf(address(this));
-        if (bal0 < amount0) {
-            IERC20(token0).safeTransferFrom(userWallet, address(this), amount0 - bal0);
+        // FUND MIXING FIX: konsumsi dari parkedFunds[userWallet] dulu,
+        // baru pull kekurangan dari userWallet.
+        // Versi lama pakai balanceOf(address(this)) — tidak per-user,
+        // sehingga bisa memakai dana user lain yang parkir di waktu bersamaan.
+        uint256 parked0 = parkedFunds[userWallet][token0];
+        if (parked0 >= amount0) {
+            parkedFunds[userWallet][token0] -= amount0;
+        } else {
+            parkedFunds[userWallet][token0] = 0;
+            IERC20(token0).safeTransferFrom(userWallet, address(this), amount0 - parked0);
         }
-        // Pull token1 — sama
-        uint256 bal1 = IERC20(token1).balanceOf(address(this));
-        if (bal1 < amount1) {
-            IERC20(token1).safeTransferFrom(userWallet, address(this), amount1 - bal1);
+
+        uint256 parked1 = parkedFunds[userWallet][token1];
+        if (parked1 >= amount1) {
+            parkedFunds[userWallet][token1] -= amount1;
+        } else {
+            parkedFunds[userWallet][token1] = 0;
+            IERC20(token1).safeTransferFrom(userWallet, address(this), amount1 - parked1);
         }
         IERC20(token0).approve(address(uniswapAdapter), 0);
         IERC20(token0).approve(address(uniswapAdapter), amount0);
         IERC20(token1).approve(address(uniswapAdapter), 0);
         IERC20(token1).approve(address(uniswapAdapter), amount1);
 
-        tokenId = uniswapAdapter.mintPosition(userWallet, token0, token1, amount0, amount1);
+        tokenId = uniswapAdapter.mintPosition(userWallet, token0, token1, amount0, amount1, amount0Min, amount1Min);
 
         lpPositions[userWallet].push(LPPosition({
             pool:           address(uniswapAdapter),
@@ -781,14 +943,15 @@ contract SentinelExecutor is ReentrancyGuard {
     {
         _checkAndUpdateSpend(userWallet, amountIn);
 
-        // Pull token dari address(this) jika sudah ada (hasil executeAaveWithdraw),
-        // atau dari userWallet kalau belum ada. Ini yang memungkinkan 1-approval flow
-        // untuk LP: withdraw dari Aave → parkir di sini → swap → LP, tanpa butuh
-        // user approve USDC/USDT/WETH secara terpisah.
-        uint256 contractBal = IERC20(fromAsset).balanceOf(address(this));
-        if (contractBal < amountIn) {
-            // Kekurangan — pull sisa dari userWallet
-            uint256 needed = amountIn - contractBal;
+        // FUND MIXING FIX: konsumsi dari parkedFunds[userWallet][fromAsset] dulu,
+        // baru pull kekurangan dari userWallet.
+        // Versi lama pakai balanceOf(address(this)) global — tidak aman concurrent.
+        uint256 parked = parkedFunds[userWallet][fromAsset];
+        if (parked >= amountIn) {
+            parkedFunds[userWallet][fromAsset] -= amountIn;
+        } else {
+            parkedFunds[userWallet][fromAsset] = 0;
+            uint256 needed = amountIn - parked;
             IERC20(fromAsset).safeTransferFrom(userWallet, address(this), needed);
         }
         IERC20(fromAsset).approve(address(uniswapAdapter), 0);
@@ -921,38 +1084,85 @@ contract SentinelExecutor is ReentrancyGuard {
         Position storage pos = positions[userWallet];
         if (pos.principalDeposited == 0) revert NoPosition();
 
-        uint256 principal      = pos.principalDeposited;
-        uint256 totalWithdrawn = 0;
+        uint256 totalWithdrawn  = 0;
+        uint256 totalPrincipal  = 0; // sum of original aTokens supplied across all assets
 
-        // ── Aave: tarik 100% shares per asset (CEI: deduct dulu sebelum external call) ──
+        // ── Aave: tarik proporsi live per asset ──────────────────────────────
+        //
+        // YIELD FIX: Aave aTokens rebase otomatis. balanceOf(aToken, address(this))
+        // tumbuh seiring waktu karena bunga yang di-compound.
+        //
+        // Versi lama: withdraw(shares) → hanya tarik principal, yield hilang.
+        //
+        // Versi baru: hitung proporsi user dari pool aToken secara live:
+        //   userLiveAmount = (balanceOf(aToken, this) * userShares) / totalATokenShares[asset]
+        //
+        // CEI pattern tetap dijaga: kurangi shares SEBELUM external call.
+        //
         for (uint256 i = 0; i < aaveAssets.length; i++) {
             address asset  = aaveAssets[i];
             uint256 shares = userATokenShares[userWallet][asset];
             if (shares == 0) continue;
 
+            address aToken     = aaveAdapter.pool().getReserveData(asset).aTokenAddress;
+            uint256 poolTotal  = totalATokenShares[asset];
+            uint256 livePool   = IERC20(aToken).balanceOf(address(this));
+
+            // Hitung jumlah live yang menjadi hak user.
+            // Guard: kalau poolTotal entah bagaimana 0, fallback ke shares.
+            uint256 liveUserAmount = (poolTotal > 0)
+                ? (livePool * shares) / poolTotal
+                : shares;
+
+            // Catat principal (shares = jumlah aToken saat supply = underlying awal)
+            totalPrincipal += shares;
+
+            // CEI: kurangi shares dari state SEBELUM external call
             _subATokenShares(userWallet, asset, shares);
 
-            address aToken = aaveAdapter.pool().getReserveData(asset).aTokenAddress;
+            // Approve liveUserAmount (bukan shares) ke AaveAdapter
             IERC20(aToken).approve(address(aaveAdapter), 0);
-            IERC20(aToken).approve(address(aaveAdapter), shares);
+            IERC20(aToken).approve(address(aaveAdapter), liveUserAmount);
 
-            uint256 w = aaveAdapter.withdraw(userWallet, asset, shares, address(this));
+            uint256 w = aaveAdapter.withdraw(userWallet, asset, liveUserAmount, address(this));
             totalWithdrawn += w;
             emit Withdraw(userWallet, asset, w);
         }
 
-        // ── LP: keluar semua, token langsung ke userWallet ──
+        // ── LP: keluar semua, token langsung ke userWallet ──────────────────
+        // A1 FIX: pakai try/catch per LP exit.
+        // Versi lama: kalau satu exitPosition revert, function lanjut dan
+        // delete lpPositions[userWallet] — LP NFT stuck di UniswapAdapter
+        // selamanya karena record sudah terhapus.
+        // Fix: skip yang gagal (log error), hapus record hanya yang berhasil.
         LPPosition[] storage lps = lpPositions[userWallet];
-        for (uint256 i = 0; i < lps.length; i++) {
-            uniswapAdapter.exitPosition(userWallet, lps[i].tokenId);
-            emit LPExited(userWallet, lps[i].tokenId, "WITHDRAW");
+        uint256 i = 0;
+        while (i < lps.length) {
+            uint256 tokenId = lps[i].tokenId;
+            try uniswapAdapter.exitPosition(userWallet, tokenId) {
+                emit LPExited(userWallet, tokenId, "WITHDRAW");
+                // Hapus entry ini dari array (swap-and-pop)
+                lps[i] = lps[lps.length - 1];
+                lps.pop();
+                // Jangan increment — recheck element yang baru di-swap ke posisi i
+            } catch {
+                // Exit gagal — biarkan record tetap ada supaya bisa di-retry
+                // Agent bisa exit manual via checkAndExitLPIfIL atau emergency
+                emit GuardrailTripped(userWallet, "LP_EXIT_FAILED_ON_WITHDRAW");
+                i++;
+            }
         }
-        delete lpPositions[userWallet];
 
-        // ── Performance fee: 20% dari yield saja ──
+        // ── Performance fee: 20% dari yield saja ─────────────────────────────
+        //
+        // YIELD FIX: fee sekarang dihitung dari selisih live vs principal.
+        // totalPrincipal = jumlah aToken saat supply (≈ underlying yang disetor).
+        // totalWithdrawn = jumlah underlying setelah include yield.
+        // Yield = totalWithdrawn - totalPrincipal (kalau positif).
+        //
         uint256 feeTaken = 0;
-        if (totalWithdrawn > principal && aaveAssets.length > 0 && treasury != address(0)) {
-            uint256 yieldAmount  = totalWithdrawn - principal;
+        if (totalWithdrawn > totalPrincipal && aaveAssets.length > 0 && treasury != address(0)) {
+            uint256 yieldAmount  = totalWithdrawn - totalPrincipal;
             uint256 totalFee     = (yieldAmount * PERFORMANCE_FEE_BPS) / BPS_DENOMINATOR;
             uint256 feeRemaining = totalFee;
 
@@ -967,38 +1177,38 @@ contract SentinelExecutor is ReentrancyGuard {
         }
 
         // ── Forward sisa ke user — semua diconvert ke USDm dulu ──
-        // User deposit USDm, user terima USDm. Simple dan tidak confusing.
-        // Non-USDm asset (USDC, USDT) di-swap via Mento sebelum dikirim.
-        // Kalau usdm belum di-set atau swap gagal, fallback kirim as-is.
         for (uint256 i = 0; i < aaveAssets.length; i++) {
             address asset = aaveAssets[i];
             uint256 bal   = IERC20(asset).balanceOf(address(this));
             if (bal == 0) continue;
 
             if (asset == usdm || usdm == address(0)) {
-                // Sudah USDm atau usdm belum di-set — kirim langsung
                 IERC20(asset).safeTransfer(userWallet, bal);
             } else {
-                // Swap ke USDm via Mento, lalu kirim USDm ke user
-                // minAmountOut = 99.5% (0.5% slippage tolerance untuk stable swap)
                 uint256 minOut = bal - (bal / 200);
                 IERC20(asset).approve(address(mentoAdapter), 0);
                 IERC20(asset).approve(address(mentoAdapter), bal);
                 try mentoAdapter.swap(userWallet, asset, usdm, bal, minOut) {
                     // amountOut langsung ke userWallet via MentoAdapter
                 } catch {
-                    // Swap gagal — kirim as-is sebagai fallback
+                    // B2 FIX: emit event saat fallback terjadi.
+                    // Versi lama: kirim as-is tanpa notifikasi — user bingung
+                    // terima USDC/USDT bukan USDm seperti yang diharapkan.
+                    // Fix: emit WithdrawFallback agar frontend/notifier bisa
+                    // inform user bahwa asset yang diterima bukan USDm.
                     IERC20(asset).approve(address(mentoAdapter), 0);
                     IERC20(asset).safeTransfer(userWallet, bal);
+                    emit WithdrawFallback(userWallet, asset, bal, "mento_swap_failed");
                 }
             }
         }
 
-        // ── Full cleanup — withdraw = keluar semua, tidak ada sisa ──
+        // ── Full cleanup ──
         delete positions[userWallet];
         delete allocations[userWallet];
         delete allowanceExpiry[userWallet];
         // userATokenShares sudah 0 semua via _subATokenShares di atas
+        // totalATokenShares[asset] juga sudah di-deduct via _subATokenShares
 
         emit GoalCompleted(userWallet, totalWithdrawn - feeTaken, feeTaken);
     }
@@ -1025,29 +1235,45 @@ contract SentinelExecutor is ReentrancyGuard {
         if (pos.principalDeposited == 0) revert NoPosition();
 
         // Tarik semua aToken shares — sama dengan withdraw() tapi tanpa fee
-        // dan output langsung ke userWallet (bukan ke address(this))
+        // dan output langsung ke userWallet (bukan ke address(this)).
+        // YIELD FIX: sama seperti withdraw() — pakai proporsi live, bukan static shares.
         for (uint256 i = 0; i < aaveAssets.length; i++) {
             address asset  = aaveAssets[i];
             uint256 shares = userATokenShares[userWallet][asset];
             if (shares == 0) continue;
 
+            address aToken    = aaveAdapter.pool().getReserveData(asset).aTokenAddress;
+            uint256 poolTotal = totalATokenShares[asset];
+            uint256 livePool  = IERC20(aToken).balanceOf(address(this));
+
+            uint256 liveUserAmount = (poolTotal > 0)
+                ? (livePool * shares) / poolTotal
+                : shares;
+
+            // CEI: kurangi shares dulu sebelum external call
             _subATokenShares(userWallet, asset, shares);
 
-            address aToken = aaveAdapter.pool().getReserveData(asset).aTokenAddress;
             IERC20(aToken).approve(address(aaveAdapter), 0);
-            IERC20(aToken).approve(address(aaveAdapter), shares);
+            IERC20(aToken).approve(address(aaveAdapter), liveUserAmount);
 
-            uint256 w = aaveAdapter.withdraw(userWallet, asset, shares, userWallet);
+            uint256 w = aaveAdapter.withdraw(userWallet, asset, liveUserAmount, userWallet);
             emit Withdraw(userWallet, asset, w);
         }
 
-        // Exit semua LP positions
+        // Exit semua LP positions — sama dengan withdraw(), pakai try/catch per exit
         LPPosition[] storage lps = lpPositions[userWallet];
-        for (uint256 i = 0; i < lps.length; i++) {
-            uniswapAdapter.exitPosition(userWallet, lps[i].tokenId);
-            emit LPExited(userWallet, lps[i].tokenId, "EMERGENCY_WITHDRAW");
+        uint256 j = 0;
+        while (j < lps.length) {
+            uint256 tokenId = lps[j].tokenId;
+            try uniswapAdapter.exitPosition(userWallet, tokenId) {
+                emit LPExited(userWallet, tokenId, "EMERGENCY_WITHDRAW");
+                lps[j] = lps[lps.length - 1];
+                lps.pop();
+            } catch {
+                emit GuardrailTripped(userWallet, "LP_EXIT_FAILED_ON_EMERGENCY");
+                j++;
+            }
         }
-        delete lpPositions[userWallet];
 
         delete positions[userWallet];
         delete allocations[userWallet];
@@ -1079,15 +1305,17 @@ contract SentinelExecutor is ReentrancyGuard {
         }
     }
 
-    /// @dev Tambah aToken shares untuk user.
+    /// @dev Tambah aToken shares untuk user + update pool total.
     function _addATokenShares(address user, address asset, uint256 amount) internal {
         userATokenShares[user][asset] += amount;
+        totalATokenShares[asset]      += amount;
     }
 
-    /// @dev Kurangi aToken shares. Reverts jika amount melebihi yang dimiliki user.
+    /// @dev Kurangi aToken shares + update pool total. Reverts jika insufficient.
     function _subATokenShares(address user, address asset, uint256 amount) internal {
         require(userATokenShares[user][asset] >= amount, "SentinelExecutor: insufficient aToken balance");
         userATokenShares[user][asset] -= amount;
+        totalATokenShares[asset]      -= amount;
     }
 
     function _isVolatile(address asset) internal view returns (bool) {
@@ -1095,40 +1323,36 @@ contract SentinelExecutor is ReentrancyGuard {
     }
 
     /**
+     * @notice Normalize token amount ke 18 desimal.
+     *         Dipakai untuk principalDeposited agar semua asset comparable.
+     *
+     * A5 FIX:
+     *   USDm (18 dec): 100e18 → 100e18     (tidak berubah)
+     *   USDC  (6 dec): 50e6   → 50e18      (× 10^12)
+     *   USDT  (6 dec): 50e6   → 50e18      (× 10^12)
+     *
+     *   Kalau assetDecimals[asset] belum di-set (= 0), fallback ke 18.
+     *   Owner wajib set decimals via setAssetDecimals() setelah whitelist.
+     */
+    function _normalizeTo18(address asset, uint256 amount) internal view returns (uint256) {
+        uint8 dec = assetDecimals[asset];
+        if (dec == 0 || dec == 18) return amount;
+        if (dec < 18) return amount * (10 ** uint256(18 - dec));
+        return amount / (10 ** uint256(dec - 18)); // edge case: dec > 18
+    }
+
+    /**
      * @notice Convert asset amount to USD using oracle if available.
      *         Falls back to raw amount (assumes 1:1 USD) if no oracle set.
-     *
-     * FIX — Oracle precision:
-     *   AaveOracleWrapper.getPrice() return Chainlink price dengan 8 desimal.
-     *   Contoh: WETH $2000 = 200_000_000_000 (2e11), USDC $1 = 100_000_000 (1e8)
-     *
-     *   Versi lama pakai /1e18, menyebabkan WETH 1e18 wei dihitung sebagai:
-     *   (1e18 * 2e11) / 1e18 = 2e11 — jauh lebih besar dari totalPortfolioUSD
-     *   sehingga guardrail volatile allocation SELALU revert.
-     *
-     *   Fix: gunakan /1e8 sesuai Chainlink decimal standard.
-     *   1 WETH: (1e18 * 2e11) / 1e8 = 2e21... masih salah scale.
-     *
-     *   Root cause: token amount dalam native decimals (1 WETH = 1e18),
-     *   oracle price dalam 8 decimals, portfolio value dalam token decimals (6 untuk stable).
-     *   Agar comparable dengan stable amounts, normalize ke 6 decimals:
-     *   usdValue = (amount * price) / (10 ** (8 + tokenDecimals - 6))
-     *
-     *   Untuk simplicity hackathon: stablecoin 1:1 fallback sudah benar (6 dec = 6 dec).
-     *   Untuk WETH (18 dec): (amount * price) / 10**(8 + 18 - 6) = / 10**20
      */
     function _toUSD(address asset, uint256 amount) internal view returns (uint256) {
         if (priceOracle == address(0)) return amount;
         try IPriceOracle(priceOracle).getPrice(asset) returns (uint256 price) {
             if (price > 0) {
-                // Chainlink 8 desimal, token decimals vary:
-                //   stable (USDC/USDT/USDm) = 6 dec → divisor = 10^(8+6-6) = 10^8
-                //   WETH = 18 dec           → divisor = 10^(8+18-6) = 10^20
-                // Deteksi berdasarkan apakah asset adalah WETH (volatile)
                 uint256 divisor = (asset == wETH) ? 1e20 : 1e8;
                 return (amount * price) / divisor;
             }
         } catch {}
-        return amount; // fallback: 1:1 (stable assets acceptable)
+        return amount;
     }
 }

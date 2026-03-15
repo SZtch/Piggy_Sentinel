@@ -23,6 +23,7 @@ export {
   setGoalActionRequired,
   clearGoalActionRequired,
   setSoftPausedByOwner,
+  setSoftPausedById,
   updateGoalAfterCycle,
   getRecentHistory,
 

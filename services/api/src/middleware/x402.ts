@@ -56,21 +56,19 @@ function parsePaymentHeader(header: string): { txHash: `0x${string}`; payer: Add
 /**
  * Verify bahwa txHash berisi USDC transfer >= 0.01 ke TREASURY.
  *
- * Replay protection sekarang pakai DB (used_payments table):
- *   - Cek DB dulu sebelum RPC call (hemat biaya)
- *   - Tulis ke DB SETELAH verifikasi on-chain berhasil
- *   - ON CONFLICT DO NOTHING = aman dari race condition kalau
- *     2 request datang bersamaan dengan txHash yang sama
+ * B1 FIX — Race condition:
+ *   Versi lama: isPaymentUsed() → verify on-chain → markPaymentUsed()
+ *   Dua concurrent request dengan txHash sama bisa lolos cek pertama
+ *   sebelum salah satunya mark ke DB → double-serve untuk 1 payment.
+ *
+ *   Fix: verify on-chain dulu, lalu pakai markPaymentUsed() sebagai
+ *   atomic INSERT lock. markPaymentUsed() sekarang return boolean:
+ *   - true  = INSERT berhasil → request ini yang berhak
+ *   - false = conflict → txHash sudah dipakai, tolak
+ *
+ *   PostgreSQL INSERT adalah atomic — tidak ada window untuk race condition.
  */
 async function verifyPayment(txHash: `0x${string}`, payer: Address): Promise<boolean> {
-
-  // ── Replay check — DB, bukan in-memory ──────────────────────────────────
-  // Cek dulu sebelum RPC call — kalau sudah dipakai, tolak langsung
-  const alreadyUsed = await isPaymentUsed(txHash);
-  if (alreadyUsed) {
-    logger.warn(`x402 replay attempt blocked: ${txHash}`);
-    return false;
-  }
 
   if (!TREASURY) {
     logger.warn("TREASURY_ADDRESS not set — skipping x402 verification in dev");
@@ -81,7 +79,7 @@ async function verifyPayment(txHash: `0x${string}`, payer: Address): Promise<boo
     const receipt = await publicClient.getTransactionReceipt({ hash: txHash });
     if (receipt.status !== "success") return false;
 
-    const minAmount = parseUnits(CHAT_PRICE_USDC, 6); // USDC 6 desimal
+    const minAmount = parseUnits(CHAT_PRICE_USDC, 6);
 
     for (const log of receipt.logs) {
       if (log.address.toLowerCase() !== USDC_ADDRESS.toLowerCase()) continue;
@@ -95,13 +93,16 @@ async function verifyPayment(txHash: `0x${string}`, payer: Address): Promise<boo
         to?.toLowerCase()   === TREASURY.toLowerCase() &&
         value >= minAmount
       ) {
-        // ── Tandai sebagai sudah dipakai di DB ───────────────────────────
-        // Ditulis SETELAH on-chain konfirmasi berhasil.
-        // ON CONFLICT DO NOTHING aman kalau ada race condition.
+        // Atomic INSERT — kalau return false berarti txHash sudah dipakai
         const amountUsdc = Number(value) / 1e6;
-        await markPaymentUsed(txHash, payer, amountUsdc);
+        const claimed = await markPaymentUsed(txHash, payer, amountUsdc);
 
-        logger.info(`x402 payment recorded to DB: ${txHash}`);
+        if (!claimed) {
+          logger.warn(`x402 replay attempt blocked (atomic): ${txHash}`);
+          return false;
+        }
+
+        logger.info(`x402 payment verified and claimed: ${txHash} from ${payer}`);
         return true;
       }
     }
