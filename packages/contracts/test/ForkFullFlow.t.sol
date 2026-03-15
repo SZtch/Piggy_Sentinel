@@ -76,18 +76,18 @@ contract ForkFullFlowTest is Test {
         mentoAdapter.setExecutor(address(sentinel));
         uniswapAdapter.setExecutor(address(sentinel));
 
-        sentinel.setWhitelistedAsset(USDM, true);
-        sentinel.setWhitelistedAsset(USDT, true);
-        sentinel.setWhitelistedAsset(USDC, true);
-        sentinel.setWhitelistedAsset(WETH, true);
         sentinel.setVolatileAssets(WETH);
         sentinel.setUsdm(USDM);
 
-        // A5 FIX: set decimals
         sentinel.setAssetDecimals(USDM, 18);
         sentinel.setAssetDecimals(USDT, 6);
         sentinel.setAssetDecimals(USDC, 6);
         sentinel.setAssetDecimals(WETH, 18);
+
+        sentinel.setWhitelistedAsset(USDM, true);
+        sentinel.setWhitelistedAsset(USDT, true);
+        sentinel.setWhitelistedAsset(USDC, true);
+        sentinel.setWhitelistedAsset(WETH, true);
 
         vm.stopPrank();
 
@@ -213,8 +213,9 @@ contract ForkFullFlowTest is Test {
         sentinel.rebalance(user);
 
         // Terlalu cepat -> revert
+        uint256 rebalanceTooSoonAt = block.timestamp + sentinel.MAX_REBALANCE_INTERVAL();
         vm.prank(agentSigner);
-        vm.expectRevert(SentinelExecutor.RebalanceTooSoon.selector);
+        vm.expectRevert(abi.encodeWithSelector(SentinelExecutor.RebalanceTooSoon.selector, rebalanceTooSoonAt));
         sentinel.rebalance(user);
 
         // Setelah 25 jam -> OK
@@ -238,11 +239,13 @@ contract ForkFullFlowTest is Test {
         _agentSupply(user2, USDC, DEPOSIT_USDC);
 
         // User1 withdraw dari Aave -> parkir di contract
+        // Aave mints slightly fewer aTokens than supplied — use actual shares
+        uint256 user1Shares = sentinel.userATokenShares(user, USDC);
         vm.prank(agentSigner);
-        sentinel.executeAaveWithdraw(user, USDC, DEPOSIT_USDC);
+        sentinel.executeAaveWithdraw(user, USDC, user1Shares);
 
         // User2 tidak punya parkedFunds
-        assertEq(sentinel.parkedFunds(user,  USDC), DEPOSIT_USDC, "User1 parked 100");
+        assertApproxEqAbs(sentinel.parkedFunds(user, USDC), DEPOSIT_USDC, 1e4, "User1 parked ~100 USDC");
         assertEq(sentinel.parkedFunds(user2, USDC), 0,            "User2 parked 0");
 
         // Forward ke user1 - tidak boleh ambil punya user2
@@ -284,26 +287,27 @@ contract ForkFullFlowTest is Test {
         address[] memory assets = new address[](3);
         assets[0] = USDM; assets[1] = USDC; assets[2] = USDT;
 
-        uint256 u1Before = IERC20(USDC).balanceOf(user)  + IERC20(USDM).balanceOf(user);
+        // Track USDC saja (6-dec) — jangan mix dengan USDm (18-dec)
+        uint256 u1Before = IERC20(USDC).balanceOf(user);
         vm.prank(user);
         sentinel.withdraw(assets);
-        uint256 u1Got = (IERC20(USDC).balanceOf(user) + IERC20(USDM).balanceOf(user)) - u1Before;
+        uint256 u1Got = IERC20(USDC).balanceOf(user) - u1Before;
 
-        uint256 u2Before = IERC20(USDC).balanceOf(user2) + IERC20(USDM).balanceOf(user2);
+        uint256 u2Before = IERC20(USDC).balanceOf(user2);
         vm.prank(user2);
         sentinel.withdraw(assets);
-        uint256 u2Got = (IERC20(USDC).balanceOf(user2) + IERC20(USDM).balanceOf(user2)) - u2Before;
+        uint256 u2Got = IERC20(USDC).balanceOf(user2) - u2Before;
 
-        console.log("User1 received:", u1Got);
-        console.log("User2 received:", u2Got);
+        console.log("User1 received (USDC):", u1Got);
+        console.log("User2 received (USDC):", u2Got);
 
-        // Keduanya dapat >= principal (karena yield setelah 30 hari)
-        assertGe(u1Got, DEPOSIT_USDC * 1e12 * 99 / 100, "User1 dapat >= principal");
-        assertGe(u2Got, DEPOSIT_USDC * 1e12 * 99 / 100, "User2 dapat >= principal");
+        // Keduanya dapat >= 99% principal (satuan 6-dec)
+        assertGe(u1Got, DEPOSIT_USDC * 99 / 100, "User1 dapat >= principal");
+        assertGe(u2Got, DEPOSIT_USDC * 99 / 100, "User2 dapat >= principal");
 
         // Tidak ada yang dapat 2x principal (tidak drain user lain)
-        assertLe(u1Got, DEPOSIT_USDC * 1e12 * 2, "User1 tidak drain user2");
-        assertLe(u2Got, DEPOSIT_USDC * 1e12 * 2, "User2 tidak drain user1");
+        assertLe(u1Got, DEPOSIT_USDC * 2, "User1 tidak drain user2");
+        assertLe(u2Got, DEPOSIT_USDC * 2, "User2 tidak drain user1");
 
         console.log("PASS: proportional yield benar, tidak ada cross-user drain");
     }
@@ -322,7 +326,7 @@ contract ForkFullFlowTest is Test {
         // Coba supply 451 USDC (total 501 > 500 limit) -> revert
         vm.prank(agentSigner);
         vm.expectRevert(
-            abi.encodeWithSelector(SentinelExecutor.SpendLimitExceeded.selector, 451e6, 450e6)
+            abi.encodeWithSelector(SentinelExecutor.SpendLimitExceeded.selector, 451e18, 450e18)
         );
         sentinel.executeAaveSupply(user, USDC, 451e6, 0);
         console.log("Spend limit enforced: PASS");
@@ -337,8 +341,9 @@ contract ForkFullFlowTest is Test {
         console.log("Epoch reset, agent bisa supply lagi: PASS");
 
         // Reset terlalu cepat -> revert
+        uint256 epochTooSoonAt = block.timestamp + sentinel.MIN_EPOCH_DURATION();
         vm.prank(agentSigner);
-        vm.expectRevert(SentinelExecutor.EpochResetTooSoon.selector);
+        vm.expectRevert(abi.encodeWithSelector(SentinelExecutor.EpochResetTooSoon.selector, epochTooSoonAt));
         sentinel.resetSpendEpoch(user);
         console.log("Epoch reset terlalu cepat ditolak: PASS");
     }
@@ -362,8 +367,9 @@ contract ForkFullFlowTest is Test {
         console.log("Agent lama masih beroperasi selama timelock: PASS");
 
         // Execute sebelum 48 jam -> revert
+        uint256 timelockAt = sentinel.agentSignerChangeAt();
         vm.prank(deployer);
-        vm.expectRevert(SentinelExecutor.TimelockNotExpired.selector);
+        vm.expectRevert(abi.encodeWithSelector(SentinelExecutor.TimelockNotExpired.selector, timelockAt));
         sentinel.executeAgentSignerChange();
         console.log("Execute sebelum 48h ditolak: PASS");
 

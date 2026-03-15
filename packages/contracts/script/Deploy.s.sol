@@ -63,17 +63,17 @@ contract Deploy is Script {
         mentoAdapter.setExecutor(address(sentinel));
         uniswapAdapter.setExecutor(address(sentinel));
 
-        // ── Step 4: Whitelist semua token ─────────────────────────────────────
-        sentinel.setWhitelistedAsset(USDM, true);
-        sentinel.setWhitelistedAsset(USDT, true);
-        sentinel.setWhitelistedAsset(USDC, true);
-        sentinel.setWhitelistedAsset(WETH, true);
-
-        // ── Step 4b: Set decimals per asset (A5 fix) ──────────────────────────
+        // ── Step 4: Set decimals DULU sebelum whitelist ───────────────────────
         sentinel.setAssetDecimals(USDM, 18);
         sentinel.setAssetDecimals(USDT, 6);
         sentinel.setAssetDecimals(USDC, 6);
         sentinel.setAssetDecimals(WETH, 18);
+
+        // ── Step 4b: Whitelist semua token ────────────────────────────────────
+        sentinel.setWhitelistedAsset(USDM, true);
+        sentinel.setWhitelistedAsset(USDT, true);
+        sentinel.setWhitelistedAsset(USDC, true);
+        sentinel.setWhitelistedAsset(WETH, true);
 
         // ── Step 5: Set WETH sebagai volatile asset ───────────────────────────
         sentinel.setVolatileAssets(WETH);

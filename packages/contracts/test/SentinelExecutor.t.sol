@@ -164,6 +164,7 @@ contract SentinelExecutorTest is Test {
 
     uint256 constant DEPOSIT  = 100e6;
     uint256 constant LIMIT    = 500e6;
+    uint256 constant LIMIT_18 = 500e18;
     uint256 constant TARGET   = 200e6;
     uint256 constant DEADLINE = 180 days;
 
@@ -196,16 +197,16 @@ contract SentinelExecutorTest is Test {
         uniMock.setExecutor(address(executor));
 
         vm.startPrank(owner);
+        executor.setAssetDecimals(address(usdc), 6);
+        executor.setAssetDecimals(address(usdt), 6);
+        executor.setAssetDecimals(address(usdm), 18);
+        executor.setAssetDecimals(address(weth), 18);
         executor.setWhitelistedAsset(address(usdc), true);
         executor.setWhitelistedAsset(address(usdt), true);
         executor.setWhitelistedAsset(address(usdm), true);
         executor.setWhitelistedAsset(address(weth), true);
         executor.setVolatileAssets(address(weth));
         executor.setUsdm(address(usdm));
-        executor.setAssetDecimals(address(usdc), 6);
-        executor.setAssetDecimals(address(usdt), 6);
-        executor.setAssetDecimals(address(usdm), 18);
-        executor.setAssetDecimals(address(weth), 18);
         vm.stopPrank();
 
         // Fund users
@@ -451,8 +452,14 @@ contract SentinelExecutorTest is Test {
 
     function test_yield_twoUsers_proportionalYield() public {
         // Pakai USDm supaya tidak ada Mento conversion
-        _register(user,  address(usdm), 100e18);
-        _register(user2, address(usdm), 100e18);
+        vm.startPrank(user);
+        usdm.approve(address(executor), type(uint256).max);
+        executor.registerGoal(address(usdm), 100e18, TARGET, block.timestamp + DEADLINE, LIMIT_18, 10_000, 0, 0);
+        vm.stopPrank();
+        vm.startPrank(user2);
+        usdm.approve(address(executor), type(uint256).max);
+        executor.registerGoal(address(usdm), 100e18, TARGET, block.timestamp + DEADLINE, LIMIT_18, 10_000, 0, 0);
+        vm.stopPrank();
         _supply(user,  address(usdm), 100e18);
         _supply(user2, address(usdm), 100e18);
 
@@ -782,7 +789,7 @@ contract SentinelExecutorTest is Test {
 
         vm.prank(agentSigner);
         vm.expectRevert(
-            abi.encodeWithSelector(SentinelExecutor.SpendLimitExceeded.selector, 451e6, 450e6)
+            abi.encodeWithSelector(SentinelExecutor.SpendLimitExceeded.selector, 451e18, 450e18)
         );
         executor.executeAaveSupply(user, address(usdc), 451e6, 0);
     }
@@ -941,7 +948,10 @@ contract SentinelExecutorTest is Test {
 
     function test_lifecycle_register_supply_yield_withdraw() public {
         // Pakai USDm (18 dec) — tidak ada Mento conversion, mudah diukur langsung
-        _register(user, address(usdm), 100e18);
+        vm.startPrank(user);
+        usdm.approve(address(executor), type(uint256).max);
+        executor.registerGoal(address(usdm), 100e18, TARGET, block.timestamp + DEADLINE, LIMIT_18, 10_000, 0, 0);
+        vm.stopPrank();
 
         uint256 aTokens = _supply(user, address(usdm), 100e18);
         assertGt(aTokens, 0);

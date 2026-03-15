@@ -483,6 +483,11 @@ contract SentinelExecutor is ReentrancyGuard {
         treasury = _treasury;
     }
 
+    function transferOwnership(address newOwner) external onlyOwner {
+        require(newOwner != address(0), "SentinelExecutor: zero address");
+        owner = newOwner;
+    }
+
     function setVolatileAssets(address _wETH) external onlyOwner {
         wETH = _wETH;
     }
@@ -493,6 +498,7 @@ contract SentinelExecutor is ReentrancyGuard {
     }
 
     function setWhitelistedAsset(address asset, bool status) external onlyOwner {
+        if (status) require(assetDecimals[asset] > 0, "SentinelExecutor: set decimals first");
         whitelistedAssets[asset] = status;
         emit AssetWhitelisted(asset, status);
     }
@@ -583,7 +589,7 @@ contract SentinelExecutor is ReentrancyGuard {
         pos.principalDeposited += _normalizeTo18(asset, amount);
         pos.goalTarget          = goalTarget;
         pos.goalDeadline        = goalDeadline;
-        pos.spendLimit          = spendLimit;
+        pos.spendLimit          = _normalizeTo18(asset, spendLimit);
 
         emit GoalRegistered(msg.sender, asset, amount);
         emit AllocationSet(
@@ -724,7 +730,7 @@ contract SentinelExecutor is ReentrancyGuard {
         userNotPaused(userWallet)
         returns (uint256 aTokensReceived)
     {
-        _checkAndUpdateSpend(userWallet, amount);
+        _checkAndUpdateSpend(userWallet, _normalizeTo18(asset, amount));
 
         IERC20(asset).safeTransferFrom(userWallet, address(this), amount);
         IERC20(asset).approve(address(aaveAdapter), 0);
@@ -803,7 +809,7 @@ contract SentinelExecutor is ReentrancyGuard {
             }
         }
 
-        _checkAndUpdateSpend(userWallet, amount0 + amount1);
+        _checkAndUpdateSpend(userWallet, _normalizeTo18(token0, amount0) + _normalizeTo18(token1, amount1));
 
         // FUND MIXING FIX: konsumsi dari parkedFunds[userWallet] dulu,
         // baru pull kekurangan dari userWallet.
@@ -941,7 +947,7 @@ contract SentinelExecutor is ReentrancyGuard {
         userNotPaused(userWallet)
         returns (uint256 amountOut)
     {
-        _checkAndUpdateSpend(userWallet, amountIn);
+        _checkAndUpdateSpend(userWallet, _normalizeTo18(fromAsset, amountIn));
 
         // FUND MIXING FIX: konsumsi dari parkedFunds[userWallet][fromAsset] dulu,
         // baru pull kekurangan dari userWallet.
@@ -1009,7 +1015,7 @@ contract SentinelExecutor is ReentrancyGuard {
         userNotPaused(userWallet)
         returns (uint256 amountOut, uint256 aTokensReceived)
     {
-        _checkAndUpdateSpend(userWallet, amountIn);
+        _checkAndUpdateSpend(userWallet, _normalizeTo18(fromAsset, amountIn));
 
         // Step 1: Pull fromAsset (USDm) dari userWallet ke sini
         IERC20(fromAsset).safeTransferFrom(userWallet, address(this), amountIn);
@@ -1054,7 +1060,7 @@ contract SentinelExecutor is ReentrancyGuard {
         userNotPaused(userWallet)
         returns (uint256 amountOut)
     {
-        _checkAndUpdateSpend(userWallet, amountIn);
+        _checkAndUpdateSpend(userWallet, _normalizeTo18(fromAsset, amountIn));
 
         IERC20(fromAsset).safeTransferFrom(userWallet, address(this), amountIn);
         IERC20(fromAsset).approve(address(mentoAdapter), 0);
