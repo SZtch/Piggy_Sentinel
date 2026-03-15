@@ -232,6 +232,32 @@ export const SENTINEL_EXECUTOR_ABI = [
     outputs: [{ name: "", type: "bool" }],
   },
 
+  // ── User functions ───────────────────────────────────────────────────────
+  {
+    type: "function", name: "registerGoal", stateMutability: "nonpayable",
+    inputs: [
+      { name: "asset",        type: "address" },
+      { name: "amount",       type: "uint256" },
+      { name: "goalTarget",   type: "uint256" },
+      { name: "goalDeadline", type: "uint256" },
+      { name: "spendLimit",   type: "uint256" },
+      { name: "stableBps",    type: "uint256" },
+      { name: "lpBps",        type: "uint256" },
+      { name: "wethBps",      type: "uint256" },
+    ],
+    outputs: [],
+  },
+  {
+    type: "function", name: "setUserPaused", stateMutability: "nonpayable",
+    inputs:  [{ name: "_paused", type: "bool" }],
+    outputs: [],
+  },
+  {
+    type: "function", name: "setAllowanceExpiry", stateMutability: "nonpayable",
+    inputs:  [{ name: "expiresAt", type: "uint256" }],
+    outputs: [],
+  },
+
   // ── Events ────────────────────────────────────────────────────────────────
   {
     type:   "event",
@@ -324,4 +350,8 @@ export const SENTINEL_EXECUTOR_ABI = [
   { type: "error", name: "NoPosition",              inputs: [] },
   { type: "error", name: "OracleNotSet",            inputs: [] },
   { type: "error", name: "AllowanceExpired",        inputs: [] },
+  // FIX: missing errors — menyebabkan error tidak bisa di-decode oleh agent
+  { type: "error", name: "EpochResetTooSoon",       inputs: [{ name: "nextAllowed", type: "uint256" }] },
+  { type: "error", name: "TimelockNotExpired",      inputs: [{ name: "executeAt",   type: "uint256" }] },
+  { type: "error", name: "NoPendingSignerChange",   inputs: [] },
 ] as const;

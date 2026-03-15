@@ -245,33 +245,22 @@ export async function chatRoutes(app: FastifyInstance) {
           });
         } catch {}
 
-        goalContext = `User's savings goal:
-- Target: $${targetUSD.toFixed(2)} USDm
-- Current balance: $${currentUSD.toFixed(2)} (${progress.toFixed(1)}% complete)
-- Yield earned so far: +$${yieldEarned.toFixed(2)}
-- Deadline: ${deadline.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })} (${daysLeft} days left)
-- Status: ${goal.status}${goal.soft_paused ? " (paused)" : ""}
-
-Live APY from Aave (Celo):
-- USDT: ${apy.usdt.toFixed(2)}%
-- USDC: ${apy.usdc.toFixed(2)}%
-- USDm: ${apy.usdm.toFixed(2)}%
-- Blended (60/30/10): ~${blendedApy.toFixed(2)}%
-
-Current yield landscape (for context when user asks about alternatives):
-- Aave V3 Celo is the only active stablecoin lending protocol on Celo
-- Uniswap V3 LP available for moderate/aggressive tier (higher yield, has IL risk)
-- Benchmark: US Treasury ~4.5%, CELO staking ~4%, Piggy blended ~${blendedApy.toFixed(2)}%
-- Penny should always frame Aave APY relative to these benchmarks
-
-${feasibility ? `Feasibility analysis:
-- Projected value at deadline: $${feasibility.projectedValueFromBalance.toFixed(2)}
-- Goal achievable with current balance + yield: ${feasibility.achievableWithBalance ? "YES ✅" : "NOT YET"}
-- ${feasibility.achievableWithBalance ? "On track — yield alone can reach the target" : `Monthly addition needed to close gap: ~$${feasibility.requiredMonthlyDeposit.toFixed(2)}/month`}
-- Assessment: ${feasibility.verdict}` : ""}
-
-${pace ? `Pace: ${pace.paceStatus.replace(/_/g, " ")} — ${pace.message}` : ""}`;
-      }
+        goalContext = [
+          "User's savings goal:",
+          "- Target: $" + targetUSD.toFixed(2) + " USDm",
+          "- Current balance: $" + currentUSD.toFixed(2) + " (" + progress.toFixed(1) + "% complete)",
+          "- Yield earned so far: +$" + yieldEarned.toFixed(2),
+          "- Deadline: " + deadline.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" }) + " (" + daysLeft + " days left)",
+          "- Status: " + goal.status + (goal.soft_paused ? " (paused)" : ""),
+          "",
+          "Live APY from Aave (Celo):",
+          "- USDT: " + apy.usdt.toFixed(2) + "%",
+          "- USDC: " + apy.usdc.toFixed(2) + "%",
+          "- USDm: " + apy.usdm.toFixed(2) + "%",
+          "- Blended (60/30/10): ~" + blendedApy.toFixed(2) + "%",
+          feasibility ? "Feasibility: $" + feasibility.projectedValueFromBalance.toFixed(2) + " projected | " + (feasibility.achievableWithBalance ? "on track" : "needs deposits") + " | " + feasibility.verdict : "",
+          pace ? "Pace: " + pace.paceStatus.replace(/_/g, " ") + " - " + pace.message : "",
+        ].filter(Boolean).join("\n");}
     } catch (err) {
       logger.warn("Failed to load goal context", err as object);
     }

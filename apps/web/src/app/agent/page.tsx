@@ -1,12 +1,34 @@
 "use client";
 import { useEffect, useState } from "react";
-import { usePrivy } from "@privy-io/react-auth";
+import { usePrivy, useWallets } from "@privy-io/react-auth";
 import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
 import { api, type GoalData } from "@/lib/api";
+import { createWalletClient, custom, encodeFunctionData, defineChain, type Address } from "viem";
+import { celo } from "viem/chains";
+
+const celoSepolia = defineChain({
+  id: 11142220, name: "Celo Sepolia",
+  nativeCurrency: { name: "CELO", symbol: "CELO", decimals: 18 },
+  rpcUrls: { default: { http: ["https://forno.celo-sepolia.celo.org"] } },
+  blockExplorers: { default: { name: "Blockscout", url: "https://celo-sepolia.blockscout.com" } },
+  testnet: true,
+});
+
+const IS_MAINNET = process.env.NEXT_PUBLIC_APP_ENV === "prod";
+const CHAIN      = IS_MAINNET ? celo : celoSepolia;
+const EXECUTOR   = process.env.NEXT_PUBLIC_SENTINEL_EXECUTOR_ADDRESS as Address;
+
+// ABI for setUserPaused — only user can call this (msg.sender check in contract)
+const SET_USER_PAUSED_ABI = [{
+  name: "setUserPaused", type: "function", stateMutability: "nonpayable",
+  inputs:  [{ name: "_paused", type: "bool" }],
+  outputs: [],
+}] as const;
 
 export default function AgentPage() {
   const { ready, authenticated, user } = usePrivy();
+  const { wallets } = useWallets();
   const router  = useRouter();
   const address = user?.wallet?.address;
 
@@ -33,14 +55,40 @@ export default function AgentPage() {
   }, [ready, authenticated, address]);
 
   async function togglePause() {
-    if (!goal) return;
+    if (!goal || !wallets[0] || !address) return;
     setPausing(true);
+    setError(null);
     try {
-      if (goal.soft_paused) await api.resumeGoal(goal.id);
-      else await api.pauseGoal(goal.id);
-      setGoal(g => g ? { ...g, soft_paused: !g.soft_paused } : null);
-    } catch (e) { setError((e as Error).message); }
-    finally { setPausing(false); }
+      const newPausedState = !goal.soft_paused;
+
+      // Step 1: Submit on-chain tx — setUserPaused(bool)
+      // Only user (msg.sender) can call this, not the agent.
+      // FIX: sebelumnya hanya update DB, kontrak tidak tahu pause state.
+      // Sekarang: submit tx dulu ke kontrak, baru update DB.
+      const provider = await wallets[0].getEthereumProvider();
+      const client   = createWalletClient({
+        account:   address as Address,
+        chain:     CHAIN,
+        transport: custom(provider),
+      });
+
+      await client.writeContract({
+        address:      EXECUTOR,
+        abi:          SET_USER_PAUSED_ABI,
+        functionName: "setUserPaused",
+        args:         [newPausedState],
+      });
+
+      // Step 2: Update DB via API (setelah on-chain confirmed)
+      if (newPausedState) await api.pauseGoal(goal.id);
+      else                await api.resumeGoal(goal.id);
+
+      setGoal(g => g ? { ...g, soft_paused: newPausedState } : null);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setPausing(false);
+    }
   }
 
   const nextCycle = (() => {

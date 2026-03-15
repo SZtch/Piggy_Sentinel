@@ -6,11 +6,12 @@ import { celo } from "viem/chains";
 import { defineChain } from "viem";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
+import { SENTINEL_EXECUTOR_ABI } from "@piggy/shared";
 
 const celoSepolia = defineChain({
   id: 11142220, name: "Celo Sepolia",
   nativeCurrency: { name: "CELO", symbol: "CELO", decimals: 18 },
-  rpcUrls: { default: { http: ["https://forno.celo-sepolia.celo.org"] } },
+  rpcUrls: { default: { http: [process.env.NEXT_PUBLIC_CELO_RPC_URL_SEPOLIA ?? "https://forno.celo-sepolia.celo.org", "https://celo-sepolia.drpc.org"] } },
   blockExplorers: { default: { name: "Blockscout", url: "https://celo-sepolia.blockscout.com" } },
   testnet: true,
 });
@@ -22,20 +23,7 @@ const CHAIN      = IS_MAINNET ? celo : celoSepolia;
 const EXPLORER   = IS_MAINNET ? "https://celo.blockscout.com/tx/" : "https://celo-sepolia.blockscout.com/tx/";
 const ERC20_ABI  = [{ name: "approve", type: "function", stateMutability: "nonpayable", inputs: [{ name: "spender", type: "address" }, { name: "amount", type: "uint256" }], outputs: [{ type: "bool" }] }] as const;
 
-const REGISTER_GOAL_ABI = [{
-  name: "registerGoal", type: "function", stateMutability: "nonpayable",
-  inputs: [
-    { name: "asset",       type: "address" },
-    { name: "amount",      type: "uint256" },
-    { name: "goalTarget",  type: "uint256" },
-    { name: "goalDeadline",type: "uint256" },
-    { name: "spendLimit",  type: "uint256" },
-    { name: "stableBps",   type: "uint256" },
-    { name: "lpBps",       type: "uint256" },
-    { name: "wethBps",     type: "uint256" },
-  ],
-  outputs: [],
-}] as const;
+// registerGoal ABI sudah di-import dari SENTINEL_EXECUTOR_ABI (@piggy/shared)
 
 type Step = "goal" | "permission" | "done";
 
@@ -138,7 +126,7 @@ export default function EnablePage() {
       // Register goal on-chain
       const deadlineTs = BigInt(Math.floor(new Date(deadline).getTime() / 1000));
       await client.writeContract({
-        address: EXECUTOR, abi: REGISTER_GOAL_ABI,
+        address: EXECUTOR, abi: SENTINEL_EXECUTOR_ABI,
         functionName: "registerGoal",
         args: [
           USDM_ADDR,                        // asset: USDm

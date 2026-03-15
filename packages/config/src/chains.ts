@@ -1,62 +1,73 @@
-// ─────────────────────────────────────────────────────────────────────────────
-// @piggy/config — Chain Configuration
-//
-// Single source of truth untuk chain ID, viem chain object, dan RPC URL.
-// IS_MAINNET digunakan sebagai guard di seluruh codebase.
-// ─────────────────────────────────────────────────────────────────────────────
-
 import { defineChain } from "viem";
 
-// ── Celo Mainnet ──────────────────────────────────────────────────────────────
-export const celoMainnet = defineChain({
-  id:          42220,
-  name:        "Celo",
-  nativeCurrency: {
-    decimals: 18,
-    name:     "CELO",
-    symbol:   "CELO",
-  },
-  rpcUrls: {
-    default: {
-      http: [process.env.CELO_RPC_URL_MAINNET ?? "https://forno.celo.org"],
-    },
-  },
-  blockExplorers: {
-    default: { name: "CeloScan", url: "https://celoscan.io" },
-  },
-});
+// ── RPC URLs ──────────────────────────────────────────────────────────────────
+//
+// FIX: multiple RPC fallbacks untuk reliability.
+// viem otomatis fallback ke URL berikutnya kalau request gagal.
+// Kalau forno down → drpc.org dipakai → agent tetap jalan.
+//
+// Tambah CELO_RPC_URL_MAINNET_2 di .env untuk custom secondary RPC
+// (contoh: Infura, Alchemy, QuickNode)
 
-// ── Celo Alfajores (Sepolia equivalent) ───────────────────────────────────────
-export const celoAlfajores = defineChain({
-  id:          44787,
-  name:        "Celo Alfajores",
-  nativeCurrency: {
-    decimals: 18,
-    name:     "CELO",
-    symbol:   "CELO",
-  },
+const MAINNET_RPCS: string[] = [
+  process.env.CELO_RPC_URL_MAINNET   ?? "https://forno.celo.org",
+  process.env.CELO_RPC_URL_MAINNET_2 ?? "https://celo.drpc.org",
+  "https://rpc.ankr.com/celo",
+];
+
+const SEPOLIA_RPCS: string[] = [
+  process.env.CELO_RPC_URL_SEPOLIA   ?? "https://forno.celo-sepolia.celo.org",
+  process.env.CELO_RPC_URL_SEPOLIA_2 ?? "https://celo-sepolia.drpc.org",
+];
+
+export const celoSepolia = defineChain({
+  id: 11142220,
+  name: "Celo Sepolia",
+  nativeCurrency: { name: "CELO", symbol: "CELO", decimals: 18 },
   rpcUrls: {
     default: {
-      http: [process.env.CELO_RPC_URL_SEPOLIA ?? "https://alfajores-forno.celo-testnet.org"],
+      http: SEPOLIA_RPCS,
     },
   },
   blockExplorers: {
-    default: { name: "CeloScan", url: "https://alfajores.celoscan.io" },
+    default: { name: "Blockscout", url: "https://celo-sepolia.blockscout.com" },
   },
   testnet: true,
 });
 
-// ── Active chain resolution ────────────────────────────────────────────────────
-// APP_ENV=prod → mainnet
-// APP_ENV=fork → mainnet (fork via Anvil, same chain ID 42220)
-// everything else → Alfajores
+export const celoMainnet = defineChain({
+  id: 42220,
+  name: "Celo",
+  nativeCurrency: { name: "CELO", symbol: "CELO", decimals: 18 },
+  rpcUrls: {
+    default: {
+      http: MAINNET_RPCS,
+    },
+  },
+  blockExplorers: {
+    default: { name: "Blockscout", url: "https://celo.blockscout.com" },
+  },
+  testnet: false,
+});
 
-const appEnv = process.env.APP_ENV ?? "dev";
+export type AppEnv = "dev" | "staging" | "prod";
+export type SupportedChainId = 11142220 | 42220;
 
-export const IS_MAINNET = appEnv === "prod" || appEnv === "fork";
+const APP_ENV = (process.env.APP_ENV ?? "dev") as AppEnv;
 
-export const activeChain = IS_MAINNET ? celoMainnet : celoAlfajores;
+const CHAIN_MAP: Record<AppEnv, ReturnType<typeof defineChain>> = {
+  dev:     celoSepolia,
+  staging: celoSepolia,
+  prod:    celoMainnet,
+};
 
-export const CHAIN_ID: number = activeChain.id;
+export const activeChain = CHAIN_MAP[APP_ENV];
+export const CHAIN_ID    = activeChain.id as SupportedChainId;
+export const IS_MAINNET  = CHAIN_ID === 42220;
+export const IS_TESTNET  = !IS_MAINNET;
 
-export const RPC_URL: string = activeChain.rpcUrls.default.http[0];
+export function getChain(id: SupportedChainId) {
+  if (id === 11142220) return celoSepolia;
+  if (id === 42220)    return celoMainnet;
+  throw new Error(`Unsupported chain ID: ${id}`);
+}

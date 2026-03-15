@@ -3,7 +3,13 @@
 //
 // Determines whether the agent should execute a rebalance this cycle.
 // All guardrails are checked here before any on-chain action is taken.
+//
+// DEMO_MODE: set DEMO_MODE=true di .env untuk bypass gas/amount guardrails.
+// Berguna untuk demo hackathon dengan portfolio kecil ($10).
+// Jangan aktifkan di production.
 // ─────────────────────────────────────────────────────────────────────────────
+
+const DEMO_MODE = process.env.DEMO_MODE === "true";
 
 import type { AgentDecision } from "@piggy/shared";
 import {
@@ -65,6 +71,19 @@ export interface DecisionInput {
  */
 export function makeDecision(input: DecisionInput): AgentDecision {
   const { softPaused, portfolio, apys, lastRebalancedAt, estimatedGasUSD } = input;
+
+  // ── DEMO MODE: bypass semua guardrail kecuali paused ─────────────────────
+  // Aktifkan dengan DEMO_MODE=true di .env — untuk demo dengan portfolio kecil.
+  // Tetap blokir kalau goal di-pause agar user control tetap dihormati.
+  if (DEMO_MODE && !softPaused && input.goalStatus !== "paused") {
+    const newBlended = computeBlended(apys);
+    return execute(
+      "execute_rebalance",
+      portfolio.lpUSD > 0 ? "lp" : "stable",
+      newBlended,
+      `[DEMO MODE] bypassing guardrails — blended APY ${newBlended.toFixed(2)}%`,
+    );
+  }
 
   // ── Guardrail 1: paused ────────────────────────────────────────────────────
   if (softPaused || input.goalStatus === "paused") {

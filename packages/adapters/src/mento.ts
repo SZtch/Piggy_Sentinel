@@ -32,19 +32,78 @@ const BROKER_ABI = [
 ] as const;
 
 // Mento exchange provider (BiPoolManager)
+// Source: https://docs.mento.org/mento-v3/build/deployments/addresses
 const EXCHANGE_PROVIDER = "0x22d9db95E6Ae61c104A7B6F6C78D7993B94ec901" as const;
 
-// Exchange IDs for each stable pair (Mento BiPool)
-// Source: Mento docs / on-chain registry
-// keccak256-derived pair identifiers
-const EXCHANGE_IDS: Partial<Record<string, `0x${string}`>> = {
-  "USDm/USDC": "0x3135b662c38265d0655177091f1b647b4fef511103d06c016efdf18b46930d2c",
-  "USDm/USDT": "0x1c3c7c7f7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c",
-  "USDC/USDm": "0x3135b662c38265d0655177091f1b647b4fef511103d06c016efdf18b46930d2c",
-  "USDT/USDm": "0x1c3c7c7f7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c",
-  "USDm/cEUR": "0x27b8bc9bdf70c61c52d4df12cc47b4cf3ad0f9fb7f4e5e3c9e8f8a6d6d6d6d6d",
-  "cEUR/USDm": "0x27b8bc9bdf70c61c52d4df12cc47b4cf3ad0f9fb7f4e5e3c9e8f8a6d6d6d6d6d",
-};
+// BiPoolManager ABI — getExchanges() returns all registered pairs with their IDs
+const BIPOOL_ABI = [
+  {
+    type:            "function",
+    name:            "getExchanges",
+    stateMutability: "view",
+    inputs:          [],
+    outputs: [{
+      name: "",
+      type: "tuple[]",
+      components: [
+        { name: "exchangeId", type: "bytes32"    },
+        { name: "assets",     type: "address[]"  },
+      ],
+    }],
+  },
+] as const;
+
+// Cache: pairKey → exchangeId, fetched once from on-chain
+// Avoids repeated RPC calls per swap. Invalidated on process restart.
+const exchangeIdCache = new Map<string, `0x${string}`>();
+let   exchangeCacheLoaded = false;
+
+/**
+ * Fetch all exchange IDs from BiPoolManager and populate cache.
+ * Called once lazily on first swap. Safe to call multiple times (idempotent).
+ *
+ * FIX: replaces hardcoded EXCHANGE_IDS that contained placeholder values
+ * (e.g. 0x1c3c7c7c... for USDm/USDT) which caused every swap quote to
+ * fall back to a 1:1 estimate, bypassing the real Mento price oracle.
+ */
+async function loadExchangeIds(): Promise<void> {
+  if (exchangeCacheLoaded) return;
+
+  try {
+    const exchanges = await publicClient.readContract({
+      address:      EXCHANGE_PROVIDER,
+      abi:          BIPOOL_ABI,
+      functionName: "getExchanges",
+    });
+
+    for (const ex of exchanges) {
+      const [asset0, asset1] = ex.assets;
+      if (!asset0 || !asset1) continue;
+
+      // Build reverse lookup: address → symbol
+      const symOf = (addr: string): string | undefined => {
+        const lower = addr.toLowerCase();
+        for (const sym of ["USDm", "USDT", "USDC", "wETH"] as const) {
+          if (getTokenAddress(CHAIN_ID, sym).toLowerCase() === lower) return sym;
+        }
+        return undefined;
+      };
+
+      const sym0 = symOf(asset0);
+      const sym1 = symOf(asset1);
+      if (!sym0 || !sym1) continue;
+
+      // Cache both directions — Mento swap is bidirectional per exchangeId
+      exchangeIdCache.set(`${sym0}/${sym1}`, ex.exchangeId as `0x${string}`);
+      exchangeIdCache.set(`${sym1}/${sym0}`, ex.exchangeId as `0x${string}`);
+    }
+
+    exchangeCacheLoaded = true;
+  } catch (err) {
+    // Non-fatal — getAmountOut will fall back to estimate
+    console.warn("[mento] Failed to load exchange IDs from BiPoolManager:", err);
+  }
+}
 
 const publicClient = createPublicClient({
   chain:     activeChain,
@@ -75,7 +134,10 @@ async function getAmountOut(
   to:       TokenSymbol,
   amountIn: bigint,
 ): Promise<bigint> {
-  const exchangeId = EXCHANGE_IDS[pairKey(from, to)];
+  // Lazy-load exchange IDs from BiPoolManager on first call
+  await loadExchangeIds();
+
+  const exchangeId = exchangeIdCache.get(pairKey(from, to));
 
   if (!exchangeId) {
     // Unknown pair — return 99% of amountIn as a conservative estimate.

@@ -35,7 +35,8 @@ import {
   aggregateRiskScores,
   evaluateCircuitBreaker,
   checkStablecoinPegs,
-} from "@piggy/agent/skills/safety/index.js"; // includes simulateTransaction
+  simulateTransaction,
+} from "@piggy/agent/skills/safety/index.js";
 import {
   checkProtocolHealth,
   evaluateGasPolicy,

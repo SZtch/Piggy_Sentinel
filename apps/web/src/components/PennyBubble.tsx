@@ -8,7 +8,7 @@ import { defineChain } from "viem";
 const celoSepolia = defineChain({
   id: 11142220, name: "Celo Sepolia",
   nativeCurrency: { name: "CELO", symbol: "CELO", decimals: 18 },
-  rpcUrls: { default: { http: ["https://forno.celo-sepolia.celo.org"] } },
+  rpcUrls: { default: { http: [process.env.NEXT_PUBLIC_CELO_RPC_URL_SEPOLIA ?? "https://forno.celo-sepolia.celo.org", "https://celo-sepolia.drpc.org"] } },
   testnet: true,
 });
 

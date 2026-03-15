@@ -119,7 +119,7 @@ contract SentinelExecutor is ReentrancyGuard {
     uint256 public constant MAX_SLIPPAGE_BPS        = 100;    // 1%
     uint256 public constant PERFORMANCE_FEE_BPS     = 2000;   // 20%
     uint256 public constant BPS_DENOMINATOR         = 10_000;
-    uint256 public constant MIN_EPOCH_DURATION      = 30 days; // minimum antara dua epoch reset
+    uint256 public constant MIN_EPOCH_DURATION      = 7 days; // minimum antara dua epoch reset
 
     // ─────────────────────────────────────────────
     // Strategy Allocation (per user)
@@ -1062,7 +1062,21 @@ contract SentinelExecutor is ReentrancyGuard {
     {
         _checkAndUpdateSpend(userWallet, _normalizeTo18(fromAsset, amountIn));
 
-        IERC20(fromAsset).safeTransferFrom(userWallet, address(this), amountIn);
+        // REBALANCE FIX: cek parkedFunds[userWallet][fromAsset] dulu sebelum
+        // pull dari userWallet. Tanpa ini, rebalance selalu revert karena:
+        //   executeAaveWithdraw → USDT masuk parkedFunds (bukan userWallet)
+        //   executeMentoSwap   → cari USDT di userWallet → tidak ada → revert
+        //
+        // Konsisten dengan executeUniswapSwap yang sudah handle parkedFunds.
+        uint256 parked = parkedFunds[userWallet][fromAsset];
+        if (parked >= amountIn) {
+            parkedFunds[userWallet][fromAsset] -= amountIn;
+        } else {
+            parkedFunds[userWallet][fromAsset] = 0;
+            uint256 needed = amountIn - parked;
+            IERC20(fromAsset).safeTransferFrom(userWallet, address(this), needed);
+        }
+
         IERC20(fromAsset).approve(address(mentoAdapter), 0);
         IERC20(fromAsset).approve(address(mentoAdapter), amountIn);
 

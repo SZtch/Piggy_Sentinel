@@ -14,13 +14,13 @@ import { api, type GoalData } from "@/lib/api";
 const celoSepolia = defineChain({
   id: 11142220, name: "Celo Sepolia",
   nativeCurrency: { name: "CELO", symbol: "CELO", decimals: 18 },
-  rpcUrls: { default: { http: ["https://forno.celo-sepolia.celo.org"] } },
+  rpcUrls: { default: { http: [process.env.NEXT_PUBLIC_CELO_RPC_URL_SEPOLIA ?? "https://forno.celo-sepolia.celo.org", "https://celo-sepolia.drpc.org"] } },
   blockExplorers: { default: { name: "Blockscout", url: "https://celo-sepolia.blockscout.com" } },
   testnet: true,
 });
 const IS_MAINNET  = process.env.NEXT_PUBLIC_APP_ENV === "prod";
 const CHAIN       = IS_MAINNET ? celo : celoSepolia;
-const RPC_URL     = IS_MAINNET ? "https://forno.celo.org" : "https://forno.celo-sepolia.celo.org";
+const RPC_URL     = IS_MAINNET ? (process.env.NEXT_PUBLIC_CELO_RPC_URL_MAINNET ?? "https://forno.celo.org") : (process.env.NEXT_PUBLIC_CELO_RPC_URL_SEPOLIA ?? "https://forno.celo-sepolia.celo.org");
 const EXPLORER    = IS_MAINNET ? "https://celo.blockscout.com/tx/" : "https://celo-sepolia.blockscout.com/tx/";
 
 const EXECUTOR = process.env.NEXT_PUBLIC_SENTINEL_EXECUTOR_ADDRESS as Address;

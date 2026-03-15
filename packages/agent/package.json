@@ -42,7 +42,9 @@
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
-    "dev": "tsc --watch"
+    "dev": "tsc --watch",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@piggy/config": "workspace:*",
@@ -50,6 +52,18 @@
     "viem": "^2.0.0"
   },
   "devDependencies": {
-    "typescript": "^5.4.0"
+    "typescript": "^5.4.0",
+    "vitest": "^1.6.0",
+    "@vitest/coverage-v8": "^1.6.0"
+  },
+  "vitest": {
+    "environment": "node",
+    "include": [
+      "src/**/*.test.ts"
+    ],
+    "exclude": [
+      "**/node_modules/**",
+      "**/dist/**"
+    ]
   }
 }

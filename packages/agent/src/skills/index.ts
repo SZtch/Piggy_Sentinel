@@ -177,8 +177,34 @@ export async function rebalancePortfolio(input: RebalanceInput): Promise<Rebalan
   const newUsdcAmt6 = newUsdcAmt / 10n ** 12n;
 
   // ── Build calldata ─────────────────────────────────────────────────────────
+  //
+  // REBALANCE FIX: Flow yang benar adalah:
+  //   1. Withdraw semua aToken dari Aave → parkedFunds di kontrak
+  //   2. Swap aToken non-USDm kembali ke USDm (dari parkedFunds)
+  //   3. executeMentoSwapAndSupply dengan alokasi baru (atomic: swap+supply)
+  //   4. Supply sisa USDm langsung ke Aave
+  //
+  // Versi lama langsung swap dari wallet user yang sudah kosong (semua
+  // dana sudah di Aave setelah initial allocation) → selalu revert.
+  //
+  // Dengan fix parkedFunds di executeMentoSwap, step 2 akan ambil dari
+  // parkedFunds bukan dari wallet user.
+  // ─────────────────────────────────────────────────────────────────────────
+
   const actions: TxCalldata[] = [];
 
+  // ── Helper: withdraw dari Aave ────────────────────────────────────────────
+  const withdraw = (asset: Address, amt: bigint, desc: string): TxCalldata => ({
+    to:          executor,
+    data:        encodeFunctionData({
+      abi: SENTINEL_EXECUTOR_ABI, functionName: "executeAaveWithdraw",
+      args: [user, asset, amt],
+    }),
+    value:       0n,
+    description: desc,
+  });
+
+  // ── Helper: swap via Mento (pakai parkedFunds jika ada) ──────────────────
   const swap = (from: Address, to: Address, amtIn: bigint, minOut: bigint, desc: string): TxCalldata => ({
     to:          executor,
     data:        encodeFunctionData({
@@ -189,6 +215,22 @@ export async function rebalancePortfolio(input: RebalanceInput): Promise<Rebalan
     description: desc,
   });
 
+  // ── Helper: swap+supply atomic via Mento → Aave ──────────────────────────
+  const swapAndSupply = (
+    from: Address, to: Address,
+    amtIn: bigint, minOut: bigint, minATokens: bigint,
+    desc: string
+  ): TxCalldata => ({
+    to:          executor,
+    data:        encodeFunctionData({
+      abi: SENTINEL_EXECUTOR_ABI, functionName: "executeMentoSwapAndSupply",
+      args: [user, from, to, amtIn, minOut, minATokens],
+    }),
+    value:       0n,
+    description: desc,
+  });
+
+  // ── Helper: supply langsung ke Aave ──────────────────────────────────────
   const supply = (asset: Address, amt: bigint, desc: string): TxCalldata => ({
     to:          executor,
     data:        encodeFunctionData({
@@ -199,19 +241,53 @@ export async function rebalancePortfolio(input: RebalanceInput): Promise<Rebalan
     description: desc,
   });
 
-  // Swap to new allocation ratios
-  if (newUsdtAmt6 > 0n) {
-    actions.push(swap(usdmAddr, usdtAddr, newUsdtAmt, (newUsdtAmt6 * SLIPPAGE) / 10_000n,
-      `Swap USDm→USDT ${newUsdtAmt6.toString()} (6-dec)`));
-    actions.push(supply(usdtAddr, newUsdtAmt6, `Supply USDT ${newUsdtAmt6.toString()}`));
+  // ── Step 1: Withdraw semua aToken dari Aave → parkedFunds ─────────────────
+  // Urutan: USDT dulu (terbesar), lalu USDC, lalu USDm
+  if (aavePositions.aUSDT > 0n) {
+    actions.push(withdraw(usdtAddr, aavePositions.aUSDT, `Withdraw aUSDT ${aavePositions.aUSDT.toString()}`));
   }
-  if (newUsdcAmt6 > 0n) {
-    actions.push(swap(usdmAddr, usdcAddr, newUsdcAmt, (newUsdcAmt6 * SLIPPAGE) / 10_000n,
-      `Swap USDm→USDC ${newUsdcAmt6.toString()} (6-dec)`));
-    actions.push(supply(usdcAddr, newUsdcAmt6, `Supply USDC ${newUsdcAmt6.toString()}`));
+  if (aavePositions.aUSDC > 0n) {
+    actions.push(withdraw(usdcAddr, aavePositions.aUSDC, `Withdraw aUSDC ${aavePositions.aUSDC.toString()}`));
+  }
+  if (aavePositions.aUSDm > 0n) {
+    actions.push(withdraw(usdmAddr, aavePositions.aUSDm, `Withdraw aUSDm ${aavePositions.aUSDm.toString()}`));
   }
 
-  // Remainder stays as USDm → supply directly
+  // ── Step 2: Konversi semua ke USDm dulu via Mento (dari parkedFunds) ──────
+  // USDT → USDm
+  if (aavePositions.aUSDT > 0n) {
+    const minOut = (aavePositions.aUSDT * 10n ** 12n * SLIPPAGE) / 10_000n; // scale 6→18 dec, lalu slippage
+    actions.push(swap(usdtAddr, usdmAddr, aavePositions.aUSDT, minOut,
+      `Swap USDT→USDm ${aavePositions.aUSDT.toString()} (6-dec)`));
+  }
+  // USDC → USDm
+  if (aavePositions.aUSDC > 0n) {
+    const minOut = (aavePositions.aUSDC * 10n ** 12n * SLIPPAGE) / 10_000n;
+    actions.push(swap(usdcAddr, usdmAddr, aavePositions.aUSDC, minOut,
+      `Swap USDC→USDm ${aavePositions.aUSDC.toString()} (6-dec)`));
+  }
+
+  // ── Step 3: Re-supply dengan alokasi baru via executeMentoSwapAndSupply ───
+  // USDm → USDT (atomic swap+supply)
+  if (newUsdtAmt6 > 0n) {
+    const minOut      = (newUsdtAmt6 * SLIPPAGE) / 10_000n;
+    const minATokens  = (newUsdtAmt6 * SLIPPAGE) / 10_000n;
+    actions.push(swapAndSupply(
+      usdmAddr, usdtAddr, newUsdtAmt, minOut, minATokens,
+      `SwapAndSupply USDm→USDT ${newUsdtAmt6.toString()} (6-dec)`
+    ));
+  }
+  // USDm → USDC (atomic swap+supply)
+  if (newUsdcAmt6 > 0n) {
+    const minOut      = (newUsdcAmt6 * SLIPPAGE) / 10_000n;
+    const minATokens  = (newUsdcAmt6 * SLIPPAGE) / 10_000n;
+    actions.push(swapAndSupply(
+      usdmAddr, usdcAddr, newUsdcAmt, minOut, minATokens,
+      `SwapAndSupply USDm→USDC ${newUsdcAmt6.toString()} (6-dec)`
+    ));
+  }
+
+  // ── Step 4: Supply sisa USDm langsung ke Aave ─────────────────────────────
   const usdmRemainder = totalBig - newUsdtAmt - newUsdcAmt;
   if (usdmRemainder > 0n) {
     actions.push(supply(usdmAddr, usdmRemainder, `Supply USDm ${usdmRemainder.toString()}`));

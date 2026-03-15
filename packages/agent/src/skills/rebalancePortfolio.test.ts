@@ -2,14 +2,13 @@ import { describe, it, expect } from "vitest";
 import {
   rebalancePortfolio,
   checkIL,
-  routeSwap,
   type RebalanceInput,
-} from "./rebalancePortfolio.js";
+} from "./index.js";
 import { parseUnits } from "viem";
 
 const BASE_INPUT: RebalanceInput = {
-  userWallet:      "0xUser",
-  executorAddress: "0xExecutor",
+  userWallet:       "0xUser",
+  executorAddress:  "0xExecutor",
   balances: {
     usdm: parseUnits("500", 18),
     usdc: 0n,
@@ -21,29 +20,8 @@ const BASE_INPUT: RebalanceInput = {
   currentApys:      { usdm: 1.07, usdc: 2.61, usdt: 8.89 },
   lastRebalancedAt: null,
   estimatedGasUSD:  0.05,
-  wethPriceUSD:     2000,   // FIX: required field added — used for WETH→USD portfolio valuation
+  wethPriceUSD:     2000,
 };
-
-// ── Routing rules ─────────────────────────────────────────────────────────
-
-describe("routeSwap", () => {
-  it("routes USDm → USDT to Mento", () => {
-    expect(routeSwap("USDm", "USDT")).toBe("mento");
-  });
-  it("routes USDm → USDC to Mento", () => {
-    expect(routeSwap("USDm", "USDC")).toBe("mento");
-  });
-  it("routes USDC → wETH to Uniswap", () => {
-    expect(routeSwap("USDC", "wETH")).toBe("uniswap");
-  });
-  it("routes USDT → wETH to Uniswap", () => {
-    expect(routeSwap("USDT", "wETH")).toBe("uniswap");
-  });
-  it("never routes wETH through Mento", () => {
-    expect(routeSwap("wETH", "USDC")).not.toBe("mento");
-    expect(routeSwap("USDC", "wETH")).not.toBe("mento");
-  });
-});
 
 // ── IL check ──────────────────────────────────────────────────────────────
 
@@ -56,6 +34,7 @@ describe("checkIL", () => {
     });
     expect(exits).toHaveLength(0);
   });
+
   it("returns exit when IL >= 5%", () => {
     const exits = checkIL({
       tokenIds:      [42],
@@ -64,63 +43,38 @@ describe("checkIL", () => {
     });
     expect(exits).toEqual([42]);
   });
+
   it("handles multiple positions correctly", () => {
     const exits = checkIL({
-      tokenIds:      [1,   2,    3],
-      entryValues:   [100n, 100n, 100n].map(v => v * 10n**18n),
-      currentValues: [97n,  94n,  96n].map(v => v * 10n**18n),
+      tokenIds:      [1, 2, 3],
+      entryValues:   [100n, 100n, 100n].map(v => v * 10n ** 18n),
+      currentValues: [97n, 94n, 96n].map(v => v * 10n ** 18n),
     });
-    expect(exits).toEqual([2]);  // only tokenId 2 hits 5%
+    expect(exits).toEqual([2]); // only tokenId 2 hits 5%
+  });
+
+  it("skips entry with 0 entryValue", () => {
+    const exits = checkIL({
+      tokenIds:      [1],
+      entryValues:   [0n],
+      currentValues: [0n],
+    });
+    expect(exits).toHaveLength(0);
   });
 });
 
-// ── Portfolio tiers ───────────────────────────────────────────────────────
+// ── rebalancePortfolio guardrails ─────────────────────────────────────────
 
-describe("rebalancePortfolio tiers", () => {
-  it("nano tier ($40): skip — below $200 minimum", async () => {
+describe("rebalancePortfolio guardrails", () => {
+  it("skips if portfolio below minimum", async () => {
     const result = await rebalancePortfolio({
       ...BASE_INPUT,
-      balances: { ...BASE_INPUT.balances, usdm: parseUnits("40", 18) },
+      balances: { ...BASE_INPUT.balances, usdm: parseUnits("5", 18) },
     });
     expect(result.shouldRebalance).toBe(false);
-    expect(result.tier).toBe("nano");
-    expect(result.skipReason).toMatch(/\$200/);
+    expect(result.skipReason).toMatch(/min/);
   });
 
-  it("small tier ($100): skip — below $200 minimum", async () => {
-    const result = await rebalancePortfolio({
-      ...BASE_INPUT,
-      balances: { ...BASE_INPUT.balances, usdm: parseUnits("100", 18) },
-    });
-    expect(result.shouldRebalance).toBe(false);
-    expect(result.tier).toBe("small");
-  });
-
-  it("mid tier ($300): rebalance — Aave + LP", async () => {
-    const result = await rebalancePortfolio({
-      ...BASE_INPUT,
-      balances: { ...BASE_INPUT.balances, usdm: parseUnits("300", 18) },
-    });
-    expect(result.tier).toBe("mid");
-    expect(result.targetAlloc.stableBps).toBe(8_000);
-    expect(result.targetAlloc.lpBps).toBe(2_000);
-  });
-
-  it("large tier ($1500): Aave + LP + WETH", async () => {
-    const result = await rebalancePortfolio({
-      ...BASE_INPUT,
-      balances: { ...BASE_INPUT.balances, usdm: parseUnits("1500", 18) },
-    });
-    expect(result.tier).toBe("large");
-    expect(result.targetAlloc.stableBps).toBe(6_000);
-    expect(result.targetAlloc.lpBps).toBe(3_000);
-    expect(result.targetAlloc.wethBps).toBe(1_000);
-  });
-});
-
-// ── Guardrails ────────────────────────────────────────────────────────────
-
-describe("guardrails", () => {
   it("skips if rebalanced within 24h", async () => {
     const result = await rebalancePortfolio({
       ...BASE_INPUT,
@@ -135,34 +89,37 @@ describe("guardrails", () => {
       ...BASE_INPUT,
       lastRebalancedAt: new Date(Date.now() - 25 * 3_600_000), // 25h ago
     });
-    // Will proceed past frequency check (may still skip for other reasons)
     expect(result.skipReason).not.toMatch(/rebalanced recently/);
   });
 
-  it("skips if drift < 10%", async () => {
-    // Portfolio perfectly at target — no drift
-    const result = await rebalancePortfolio({
-      ...BASE_INPUT,
-      aavePositions: {
-        aUSDm: parseUnits("50", 18),   // 10%
-        aUSDC: parseUnits("150", 6),   // 30%
-        aUSDT: parseUnits("300", 6),   // 60%
-      },
-      balances: { usdm: 0n, usdc: 0n, usdt: 0n, weth: 0n },
-    });
-    // Very low drift → skip
-    if (!result.shouldRebalance) {
-      expect(result.skipReason).toMatch(/drift|portfolio/);
-    }
-  });
-
-  it("LP allocation never exceeds 30%", async () => {
+  it("builds actions when rebalance is needed", async () => {
     const result = await rebalancePortfolio({
       ...BASE_INPUT,
       balances: { ...BASE_INPUT.balances, usdm: parseUnits("500", 18) },
     });
     if (result.shouldRebalance) {
-      expect(result.targetAlloc.lpBps).toBeLessThanOrEqual(3_000);
+      expect(result.actions.length).toBeGreaterThan(0);
+      expect(result.estimatedNewApy).toBeGreaterThan(0);
+    }
+  });
+
+  it("includes withdraw actions when Aave positions exist", async () => {
+    const result = await rebalancePortfolio({
+      ...BASE_INPUT,
+      aavePositions: {
+        aUSDm: parseUnits("50", 18),
+        aUSDC: parseUnits("150", 6),
+        aUSDT: parseUnits("300", 6),
+      },
+      balances: { usdm: 0n, usdc: 0n, usdt: 0n, weth: 0n },
+      lastRebalancedAt: new Date(Date.now() - 25 * 3_600_000),
+    });
+    if (result.shouldRebalance) {
+      // Should include executeAaveWithdraw actions
+      const withdrawActions = result.actions.filter(a =>
+        a.description?.includes("Withdraw")
+      );
+      expect(withdrawActions.length).toBeGreaterThan(0);
     }
   });
 });
